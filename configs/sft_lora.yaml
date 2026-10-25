@@ -1,0 +1,25 @@
+# Stage 1 SFT LoRA Configuration
+# Fine-tunes the base coder model on initial kernel demonstration data.
+model_name_or_path: "Qwen/Qwen2.5-Coder-7B-Instruct"
+lora_r: 64
+lora_alpha: 128
+lora_dropout: 0.0
+target_modules:
+  - "q_proj"
+  - "k_proj"
+  - "v_proj"
+  - "o_proj"
+  - "gate_proj"
+  - "up_proj"
+  - "down_proj"
+learning_rate: 2.0e-5
+num_epochs: 3
+max_seq_length: 8192
+optimizer: "sinkgd_or_adamw"
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+weight_decay: 0.01
+warmup_ratio: 0.05
+logging_steps: 10
+save_strategy: "epoch"
+seed: 42

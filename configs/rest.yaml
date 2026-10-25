@@ -1,0 +1,17 @@
+# Reinforced Self-Training (ReST) Configuration
+# Iterative filtered data generation and policy improvement.
+model_name_or_path: "Qwen/Qwen2.5-Coder-7B-Instruct"
+num_iterations: 3
+rollouts_per_task: 32
+refinement_turns: 2
+temperature: 0.85
+top_p: 0.95
+speedup_thresholds:
+  - 1.00
+  - 1.10
+  - 1.25
+max_kept_per_task: 4
+max_seq_length: 8192
+learning_rate: 1.0e-5
+batch_size: 4
+seed: 42

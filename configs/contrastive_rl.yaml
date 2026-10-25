@@ -1,0 +1,25 @@
+# Hybrid Contrastive Reinforcement Learning Configuration
+# Extends Multi-Turn Dr. GRPO with contrastive kernel archive anchors.
+model_name_or_path: "Qwen/Qwen2.5-Coder-7B-Instruct"
+lora_r: 64
+lora_alpha: 128
+batch_tasks: 8
+group_size: 16
+train_turns: 4
+eval_turns: 8
+gamma_discount: 0.4
+correctness_bonus: 0.30
+bw_bonus_weight: 0.10
+dr_grpo_l_norm: 16384
+clip_eps_low: 0.20
+clip_eps_high: 0.28
+kl_coeff: 0.0
+learning_rate: 2.0e-6
+max_grad_norm: 0.05
+max_seq_length: 8192
+seed: 42
+enable_cross_trajectory_anchors: true
+min_speedup_margin_delta: 0.25
+pairwise_margin_weight: 0.20
+pairwise_beta: 0.10
+archive_capacity_per_task: 16

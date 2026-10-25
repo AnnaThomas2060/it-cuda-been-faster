@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "it-cuda-been-faster"
+version = "0.1.0"
+description = "Automating GPU Kernel Optimizations using Multi-Turn and Contrastive Reinforcement Learning"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Anna Thomas" },
+    { name = "Mohamed Ziyadh Mohamed" },
+    { name = "Pramod Goyal" }
+]
+dependencies = [
+    "torch>=2.4.0",
+    "transformers>=4.45.0",
+    "peft>=0.13.0",
+    "trl>=0.11.0",
+    "datasets>=3.0.0",
+    "accelerate>=1.0.0",
+    "pydantic>=2.8.0",
+    "pyyaml>=6.0.1",
+    "numpy>=1.26.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.6.0",
+]
+gpu = [
+    "vllm>=0.6.3",
+    "ninja>=1.11.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-v -q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]

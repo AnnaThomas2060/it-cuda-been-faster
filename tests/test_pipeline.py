@@ -234,5 +234,22 @@ class TestPipelineComponents(unittest.TestCase):
         # TRL GRPO invariant: generation_batch_size must be divisible by global train batch size
         self.assertEqual(gen_batch_size % (per_device_train_batch_size * num_processes), 0)
 
+    def test_lora_parameter_precision_resync(self):
+        import torch
+
+        # Mock a model with trainable parameters accidentally cast to bfloat16
+        linear = torch.nn.Linear(8, 8)
+        linear.weight.data = linear.weight.data.to(torch.bfloat16)
+        self.assertEqual(linear.weight.dtype, torch.bfloat16)
+
+        # Resynchronize when is_bf16 is False (e.g. Turing T4)
+        is_bf16 = False
+        target_dtype = torch.bfloat16 if is_bf16 else torch.float32
+        for param in linear.parameters():
+            if param.requires_grad:
+                param.data = param.data.to(target_dtype)
+
+        self.assertEqual(linear.weight.dtype, torch.float32)
+
 if __name__ == "__main__":
     unittest.main()

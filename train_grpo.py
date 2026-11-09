@@ -121,6 +121,21 @@ def run_grpo_training(
         processing_class=tokenizer,
     )
 
+    # TRL GRPOTrainer.__init__ unconditionally casts all requires_grad parameters to bfloat16
+    # for quantized models. On GPUs lacking native bf16 support (e.g. Tesla T4) or when training
+    # with fp16/fp32 activations, this introduces a fatal dtype mismatch between float32 activations
+    # from embed_tokens and bfloat16 LoRA weights during generation:
+    # "RuntimeError: expected mat1 and mat2 to have the same dtype, but got: float != BFloat16".
+    # Re-sync trainable LoRA parameters to float32 (or bfloat16 if bf16 is supported):
+    target_lora_dtype = torch.bfloat16 if is_bf16 else torch.float32
+    for param in trainer.model.parameters():
+        if param.requires_grad:
+            param.data = param.data.to(target_lora_dtype)
+    if hasattr(trainer, "model_wrapped") and trainer.model_wrapped is not None:
+        for param in trainer.model_wrapped.parameters():
+            if param.requires_grad:
+                param.data = param.data.to(target_lora_dtype)
+
     logger.info("Commencing policy optimization steps.")
     trainer.train()
 

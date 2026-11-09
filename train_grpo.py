@@ -1,7 +1,8 @@
 import argparse
+import gc
 import logging
 import os
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
 # Ensure memory allocator reduces fragmentation on 24 GiB and 40 GiB GPUs.
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -40,7 +41,10 @@ def run_grpo_training(
     arm: str,
     config: ExperimentConfig,
     dry_run: bool = False,
+    model: Optional[Any] = None,
+    tokenizer: Optional[Any] = None,
 ) -> str:
+    import torch
     from trl import GRPOConfig, GRPOTrainer
 
     prompt_mode = "contrastive" if arm.lower() in ("arm_a", "contrastive") else "reference_only"
@@ -54,6 +58,11 @@ def run_grpo_training(
 
     reset_taxonomy_stats()
 
+    # Flush stale GPU allocations to reclaim all available VRAM
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     train_dataset = build_training_dataset(
         task_ids=config.training_tasks,
         num_passes=config.training_passes,
@@ -63,10 +72,16 @@ def run_grpo_training(
         f"Constructed training dataset containing {len(train_dataset)} scheduled prompt items."
     )
 
-    model, tokenizer = load_model_and_tokenizer(config=config, is_trainable=True)
+    if model is None or tokenizer is None:
+        model, tokenizer = load_model_and_tokenizer(config=config, is_trainable=True)
 
     max_steps = 1 if dry_run else -1
     num_epochs = 1 if dry_run else 1
+
+    # Hardware-aware precision setup: Turing (T4) requires fp16; Ampere/Hopper (A100) supports bf16
+    has_cuda = torch.cuda.is_available()
+    is_bf16 = has_cuda and torch.cuda.is_bf16_supported() and config.bf16
+    is_fp16 = has_cuda and not is_bf16
 
     training_args = GRPOConfig(
         output_dir=output_dir,
@@ -81,7 +96,8 @@ def run_grpo_training(
         per_device_train_batch_size=1,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
         gradient_checkpointing=config.gradient_checkpointing,
-        bf16=config.bf16,
+        bf16=is_bf16,
+        fp16=is_fp16,
         logging_steps=config.logging_steps,
         save_strategy="no" if dry_run else "steps",
         save_steps=10,
@@ -107,6 +123,12 @@ def run_grpo_training(
 
     summary = get_taxonomy_summary()
     logger.info(f"Post-run reward taxonomy summary: {summary}")
+
+    # Explicitly tear down trainer and release memory
+    del trainer
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     return adapter_save_path
 

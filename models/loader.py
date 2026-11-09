@@ -36,6 +36,9 @@ def load_model_and_tokenizer(
         tokenizer.pad_token = tokenizer.eos_token
 
     has_cuda = torch.cuda.is_available()
+    # Dynamic precision selection: Turing (T4) lacks native bf16 Tensor Cores, so use fp16
+    is_bf16_supported = has_cuda and torch.cuda.is_bf16_supported()
+    compute_dtype = torch.bfloat16 if is_bf16_supported else torch.float16
 
     if has_cuda and cfg.load_in_4bit:
         # 4-bit NF4 quantization configuration
@@ -43,13 +46,13 @@ def load_model_and_tokenizer(
             load_in_4bit=cfg.load_in_4bit,
             bnb_4bit_quant_type=cfg.bnb_4bit_quant_type,
             bnb_4bit_use_double_quant=cfg.bnb_4bit_use_double_quant,
-            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_compute_dtype=compute_dtype,
         )
         model = AutoModelForCausalLM.from_pretrained(
             target_model_name,
             quantization_config=bnb_config,
             device_map="auto",
-            torch_dtype=torch.bfloat16,
+            torch_dtype=compute_dtype,
             trust_remote_code=True,
         )
     else:
@@ -60,7 +63,7 @@ def load_model_and_tokenizer(
         model = AutoModelForCausalLM.from_pretrained(
             target_model_name,
             device_map="auto" if has_cuda else "cpu",
-            torch_dtype=torch.bfloat16 if has_cuda else torch.float32,
+            torch_dtype=compute_dtype if has_cuda else torch.float32,
             trust_remote_code=True,
         )
 

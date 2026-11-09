@@ -57,6 +57,9 @@ def compile_kernel(code_or_completion: str, verbose: bool = False) -> Tuple[Opti
     # Strip any bare #include lines missing header filenames (e.g., from browser HTML stripping)
     code = re.sub(r"^[ \t]*#include[ \t]*(?:\r?\n|$)", "\n", code, flags=re.MULTILINE)
 
+    # Auto-repair data_ptr() calls missing <float> template argument from HTML stripping
+    code = re.sub(r"(?<=\.data_ptr)\(\)", "<float>()", code)
+
     # Prevent duplicate module definition if model output included PYBIND11_MODULE
     if "PYBIND11_MODULE" in code:
         code = re.sub(r"PYBIND11_MODULE\s*\([^)]*\)\s*\{[^}]*\}", "", code)

@@ -28,8 +28,10 @@ torch::Tensor run_cuda(torch::Tensor x) {
     int total_elements = x.numel();
     const int block_size = 256;
     const int grid_size = (total_elements + block_size - 1) / block_size;
+    const float* in_ptr = (const float*)x.data_ptr();
+    float* out_ptr = (float*)output.data_ptr();
     swish_kernel_basic<<<grid_size, block_size>>>(
-        x.data_ptr<float>(), output.data_ptr<float>(), total_elements
+        in_ptr, out_ptr, total_elements
     );
     return output;
 }""",
@@ -62,10 +64,10 @@ torch::Tensor run_cuda(torch::Tensor x) {
     int total_vecs = total_elements / 4;
     const int block_size = 256;
     const int grid_size = (total_vecs + block_size - 1) / block_size;
+    const float4* in_ptr = (const float4*)x.data_ptr();
+    float4* out_ptr = (float4*)output.data_ptr();
     swish_kernel_vectorized<<<grid_size, block_size>>>(
-        reinterpret_cast<const float4*>(x.data_ptr<float>()),
-        reinterpret_cast<float4*>(output.data_ptr<float>()),
-        total_vecs
+        in_ptr, out_ptr, total_vecs
     );
     return output;
 }""",
@@ -101,8 +103,10 @@ torch::Tensor run_cuda(torch::Tensor x) {
     auto output = torch::empty({cols}, x.options());
     const int block_size = 256;
     const int grid_size = (cols + block_size - 1) / block_size;
+    const float* in_ptr = (const float*)x.data_ptr();
+    float* out_ptr = (float*)output.data_ptr();
     column_max_linear_kernel<<<grid_size, block_size>>>(
-        x.data_ptr<float>(), output.data_ptr<float>(), rows, cols
+        in_ptr, out_ptr, rows, cols
     );
     return output;
 }""",
@@ -135,8 +139,10 @@ torch::Tensor run_cuda(torch::Tensor x) {
     auto output = torch::empty({cols}, x.options());
     const int block_size = 128;
     const int grid_size = (cols + block_size - 1) / block_size;
+    const float* in_ptr = (const float*)x.data_ptr();
+    float* out_ptr = (float*)output.data_ptr();
     column_max_unrolled_kernel<<<grid_size, block_size>>>(
-        x.data_ptr<float>(), output.data_ptr<float>(), rows, cols
+        in_ptr, out_ptr, rows, cols
     );
     return output;
 }""",
@@ -193,8 +199,10 @@ torch::Tensor run_cuda(torch::Tensor x) {
     int cols = x.size(-1);
     int rows = x.numel() / cols;
     const int block_size = 256;
+    const float* in_ptr = (const float*)x.data_ptr();
+    float* out_ptr = (float*)output.data_ptr();
     rmsnorm_warp_kernel<<<rows, block_size>>>(
-        x.data_ptr<float>(), output.data_ptr<float>(), rows, cols, 1e-5f
+        in_ptr, out_ptr, rows, cols, 1e-5f
     );
     return output;
 }""",

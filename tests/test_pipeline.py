@@ -147,6 +147,18 @@ class TestPipelineComponents(unittest.TestCase):
         self.assertNotIn("#include\n", sanitized)
         self.assertIn("__global__", sanitized)
 
+    def test_data_ptr_template_repair(self):
+        # Simulates code where HTML parsers stripped <float> from data_ptr<float>()
+        corrupted_code = "kernel<<<g, b>>>(x.data_ptr(), out.data_ptr(), n);"
+        repaired = re.sub(r"(?<=\.data_ptr)\(\)", "<float>()", corrupted_code)
+        self.assertEqual(
+            repaired, "kernel<<<g, b>>>(x.data_ptr<float>(), out.data_ptr<float>(), n);"
+        )
+
+        already_typed = "kernel<<<g, b>>>(x.data_ptr<float>(), out.data_ptr<float>(), n);"
+        untouched = re.sub(r"(?<=\.data_ptr)\(\)", "<float>()", already_typed)
+        self.assertEqual(untouched, already_typed)
+
     def test_code_block_extraction(self):
         markdown_wrapped = "Here is the code:\n```cpp\n__global__ void k() {}\n```\nHope it works."
         extracted = extract_code_block(markdown_wrapped)

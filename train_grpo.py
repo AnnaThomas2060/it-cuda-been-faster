@@ -83,12 +83,20 @@ def run_grpo_training(
     is_bf16 = has_cuda and torch.cuda.is_bf16_supported() and config.bf16
     is_fp16 = has_cuda and not is_bf16
 
+    # In TRL GRPOTrainer, generation_batch_size must be divisible by num_generations.
+    # When per_device_train_batch_size=1, generation_batch_size defaults to
+    # 1 * num_processes * steps_per_generation, which violates the invariant
+    # generation_batch_size % num_generations == 0 when num_generations > 1.
+    # Setting generation_batch_size explicitly ensures valid batch partitioning.
+    gen_batch_size = config.num_generations * max(1, config.gradient_accumulation_steps)
+
     training_args = GRPOConfig(
         output_dir=output_dir,
         learning_rate=config.learning_rate,
         weight_decay=config.weight_decay,
         beta=config.beta,
         num_generations=config.num_generations,
+        generation_batch_size=gen_batch_size,
         max_prompt_length=config.max_prompt_length,
         max_completion_length=config.max_completion_length,
         temperature=config.temperature,
@@ -126,6 +134,8 @@ def run_grpo_training(
 
     # Explicitly tear down trainer and release memory
     del trainer
+    del model
+    del tokenizer
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()

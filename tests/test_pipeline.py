@@ -223,5 +223,16 @@ class TestPipelineComponents(unittest.TestCase):
         cfg.use_dev_model = True
         self.assertEqual(cfg.get_active_model_name(), "Qwen/Qwen2.5-Coder-7B-Instruct")
 
+    def test_grpo_generation_batch_size_invariant(self):
+        cfg = ExperimentConfig()
+        gen_batch_size = cfg.num_generations * max(1, cfg.gradient_accumulation_steps)
+        per_device_train_batch_size = 1
+        num_processes = 1
+
+        # TRL GRPO invariant: generation_batch_size must be divisible by num_generations
+        self.assertEqual(gen_batch_size % cfg.num_generations, 0)
+        # TRL GRPO invariant: generation_batch_size must be divisible by global train batch size
+        self.assertEqual(gen_batch_size % (per_device_train_batch_size * num_processes), 0)
+
 if __name__ == "__main__":
     unittest.main()

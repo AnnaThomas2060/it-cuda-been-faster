@@ -17,10 +17,14 @@ authors = [
 dependencies = [
     "torch>=2.4.0",
     "transformers>=4.45.0",
-    "peft>=0.13.0",
-    "trl>=0.11.0",
-    "datasets>=3.0.0",
+    "peft>=0.10.0",
+    "bitsandbytes>=0.43.0",
+    "trl>=0.15.0",
+    "ninja>=1.11.0",
+    "pybind11>=2.12.0",
     "accelerate>=1.0.0",
+    "datasets>=3.0.0",
+    "scipy>=1.10.0",
     "pydantic>=2.8.0",
     "pyyaml>=6.0.1",
     "numpy>=1.26.0",
@@ -38,7 +42,7 @@ gpu = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src*"]
+include = ["src*", "configs*", "data*", "engine*", "models*", "rewards*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

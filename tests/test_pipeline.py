@@ -1,6 +1,7 @@
 import importlib.util
 import math
 import os
+import re
 import sys
 import unittest
 
@@ -93,7 +94,7 @@ class TestPipelineComponents(unittest.TestCase):
 
     def test_compiler_static_checks(self):
         valid_code = """
-        #include <torch/extension.h>
+        #include "torch/extension.h"
         __global__ void test_kernel(float* x) {}
         torch::Tensor run_cuda(torch::Tensor x) { return x; }
         """
@@ -118,7 +119,7 @@ class TestPipelineComponents(unittest.TestCase):
     def test_static_checks_comment_resilience(self):
         # Comments discussing forbidden shortcuts should not trigger false positives
         commented_code = """
-        #include <torch/extension.h>
+        #include "torch/extension.h"
         // We replaced torch::sigmoid with direct fast exp intrinsics
         /* Also avoided at::native or torch::relu */
         __global__ void test_kernel(float* x) {}
@@ -126,6 +127,25 @@ class TestPipelineComponents(unittest.TestCase):
         """
         passed, msg = run_static_checks(commented_code)
         self.assertTrue(passed, f"Static check falsely triggered on comments: {msg}")
+
+    def test_bare_include_sanitization(self):
+        # Simulates code where HTML parsers stripped <torch/extension.h> down to bare #include
+        corrupted_code = (
+            "#include \n"
+            "#include\n"
+            "__global__ void k() {}\n"
+            "torch::Tensor run_cuda(torch::Tensor x) { return x; }\n"
+        )
+        passed, _ = run_static_checks(corrupted_code)
+        self.assertTrue(passed)
+
+        # Verify bare includes are stripped by regex without touching valid includes
+        sanitized = re.sub(
+            r"^[ \t]*#include[ \t]*(?:\r?\n|$)", "\n", corrupted_code, flags=re.MULTILINE
+        )
+        self.assertNotIn("#include \n", sanitized)
+        self.assertNotIn("#include\n", sanitized)
+        self.assertIn("__global__", sanitized)
 
     def test_code_block_extraction(self):
         markdown_wrapped = "Here is the code:\n```cpp\n__global__ void k() {}\n```\nHope it works."

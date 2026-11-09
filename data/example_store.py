@@ -10,8 +10,8 @@ TEACHER_EXAMPLES: Dict[str, List[Dict[str, Any]]] = {
             "name": "basic_elementwise_swish",
             "speedup": 1.15,
             "description": "Standard elementwise grid mapping using fast exp intrinsics.",
-            "code": """#include <torch/extension.h>
-#include <cuda_runtime.h>
+            "code": """#include "torch/extension.h"
+#include "cuda_runtime.h"
 
 __global__ void swish_kernel_basic(
     const float* __restrict__ input, float* __restrict__ output, int total_elements
@@ -38,8 +38,8 @@ torch::Tensor run_cuda(torch::Tensor x) {
             "name": "vectorized_float4_swish",
             "speedup": 1.28,
             "description": "Vectorized 128-bit memory loads and stores with float4 registers.",
-            "code": """#include <torch/extension.h>
-#include <cuda_runtime.h>
+            "code": """#include "torch/extension.h"
+#include "cuda_runtime.h"
 
 __global__ void swish_kernel_vectorized(
     const float4* __restrict__ input, float4* __restrict__ output, int total_vecs
@@ -76,8 +76,8 @@ torch::Tensor run_cuda(torch::Tensor x) {
             "name": "linear_column_scan",
             "speedup": 1.10,
             "description": "Per column thread mapping with contiguous memory striding.",
-            "code": """#include <torch/extension.h>
-#include <cuda_runtime.h>
+            "code": """#include "torch/extension.h"
+#include "cuda_runtime.h"
 
 __global__ void column_max_linear_kernel(
     const float* __restrict__ input, float* __restrict__ output, int rows, int cols
@@ -111,8 +111,8 @@ torch::Tensor run_cuda(torch::Tensor x) {
             "name": "unrolled_column_max",
             "speedup": 1.35,
             "description": "Unrolled column reduction loop using register caching.",
-            "code": """#include <torch/extension.h>
-#include <cuda_runtime.h>
+            "code": """#include "torch/extension.h"
+#include "cuda_runtime.h"
 
 __global__ void column_max_unrolled_kernel(
     const float* __restrict__ input, float* __restrict__ output, int rows, int cols
@@ -147,8 +147,8 @@ torch::Tensor run_cuda(torch::Tensor x) {
             "name": "warp_reduced_rmsnorm",
             "speedup": 1.20,
             "description": "Warp shuffle tree reduction along the trailing channel dimension.",
-            "code": """#include <torch/extension.h>
-#include <cuda_runtime.h>
+            "code": """#include "torch/extension.h"
+#include "cuda_runtime.h"
 
 __global__ void rmsnorm_warp_kernel(
     const float* __restrict__ input, float* __restrict__ output, int rows, int cols, float eps

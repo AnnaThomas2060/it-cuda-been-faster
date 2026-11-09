@@ -54,13 +54,16 @@ def compile_kernel(code_or_completion: str, verbose: bool = False) -> Tuple[Opti
     except ImportError:
         return None, "PyTorch is not available for compilation."
 
+    # Strip any bare #include lines missing header filenames (e.g., from browser HTML stripping)
+    code = re.sub(r"^[ \t]*#include[ \t]*(?:\r?\n|$)", "\n", code, flags=re.MULTILINE)
+
     # Prevent duplicate module definition if model output included PYBIND11_MODULE
     if "PYBIND11_MODULE" in code:
         code = re.sub(r"PYBIND11_MODULE\s*\([^)]*\)\s*\{[^}]*\}", "", code)
 
     module_name = f"cuda_kernel_{uuid.uuid4().hex[:12]}"
     cpp_source = """
-    #include <torch/extension.h>
+    #include "torch/extension.h"
     torch::Tensor run_cuda(torch::Tensor x);
     PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         m.def("run_cuda", &run_cuda, "CUDA kernel runner");

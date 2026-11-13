@@ -1,99 +1,171 @@
 import logging
+from pathlib import Path
 from typing import Any, Optional, Tuple
 
 from configs.grpo_config import ExperimentConfig, default_config
 
-# Model and tokenizer loading engine configuring 4-bit NF4 quantization and LoRA adapters.
-# Targets attention projections (q_proj, k_proj, v_proj, o_proj) with rank 8 and alpha 16.
-# Verifies exact trainable parameter counts against the MSAI635 architectural baseline.
-
 logger = logging.getLogger(__name__)
 
-EXPECTED_TRAINABLE_PARAMS = 6_684_672
+
+def _is_adapter_dir(path: Optional[str]) -> bool:
+    return bool(path) and (Path(path) / "adapter_config.json").exists()
+
+
+def _is_full_model_dir(path: Optional[str]) -> bool:
+    return bool(path) and (Path(path) / "config.json").exists()
+
+
+def _lora_config(config: ExperimentConfig):
+    from peft import LoraConfig
+
+    return LoraConfig(
+        r=config.lora_r,
+        lora_alpha=config.lora_alpha,
+        lora_dropout=config.lora_dropout,
+        bias=config.lora_bias,
+        target_modules=config.target_modules,
+        task_type="CAUSAL_LM",
+    )
+
 
 def load_model_and_tokenizer(
     config: Optional[ExperimentConfig] = None,
     model_name_or_path: Optional[str] = None,
     is_trainable: bool = True,
+    adapter_path: Optional[str] = None,
 ) -> Tuple[Any, Any]:
     cfg = config or default_config
     target_model_name = model_name_or_path or cfg.get_active_model_name()
+    sft_adapter_path = cfg.sft_adapter_path
+
+    if _is_full_model_dir(sft_adapter_path) and not _is_adapter_dir(sft_adapter_path):
+        target_model_name = sft_adapter_path
+        sft_adapter_path = None
 
     try:
         import torch
-        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+        from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-    except ImportError as e:
-        raise ImportError(f"Required model dependencies are missing: {e}")
+    except ImportError as exc:
+        raise ImportError(f"Required model dependencies are missing: {exc}")
 
-    # Set up left padding for autoregressive generation
-    tokenizer = AutoTokenizer.from_pretrained(
-        target_model_name,
-        trust_remote_code=True,
-        padding_side="left",
-    )
+    tokenizer_kwargs = {
+        "trust_remote_code": cfg.trust_remote_code,
+        "padding_side": "left",
+        "truncation_side": "left",
+        "cache_dir": cfg.cache_dir,
+        "local_files_only": cfg.local_files_only,
+    }
+    if cfg.model_revision:
+        tokenizer_kwargs["revision"] = cfg.model_revision
+    tokenizer = AutoTokenizer.from_pretrained(target_model_name, **tokenizer_kwargs)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     has_cuda = torch.cuda.is_available()
-    # Dynamic precision selection: Turing (T4) lacks native bf16 Tensor Cores, so use fp16
     is_bf16_supported = has_cuda and torch.cuda.is_bf16_supported()
     compute_dtype = torch.bfloat16 if is_bf16_supported else torch.float16
+    device_map = cfg.device_map if cfg.device_map else (cfg.device if has_cuda else "cpu")
+
+    model_kwargs = {
+        "device_map": device_map,
+        "torch_dtype": compute_dtype if has_cuda else torch.float32,
+        "trust_remote_code": cfg.trust_remote_code,
+        "cache_dir": cfg.cache_dir,
+        "local_files_only": cfg.local_files_only,
+    }
+    if cfg.model_revision:
+        model_kwargs["revision"] = cfg.model_revision
+    if cfg.attn_implementation:
+        model_kwargs["attn_implementation"] = cfg.attn_implementation
 
     if has_cuda and cfg.load_in_4bit:
-        # 4-bit NF4 quantization configuration
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=cfg.load_in_4bit,
+        model_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
             bnb_4bit_quant_type=cfg.bnb_4bit_quant_type,
             bnb_4bit_use_double_quant=cfg.bnb_4bit_use_double_quant,
             bnb_4bit_compute_dtype=compute_dtype,
         )
-        model = AutoModelForCausalLM.from_pretrained(
-            target_model_name,
-            quantization_config=bnb_config,
-            device_map="auto",
-            torch_dtype=compute_dtype,
-            trust_remote_code=True,
+
+    # Optional memory cap to leave headroom for activations and a co-resident
+    # verifier on a single GPU. Only applied when explicitly configured.
+    if has_cuda and getattr(cfg, "max_model_memory_per_gpu", None):
+        device_index = 0
+        if isinstance(device_map, str) and device_map.startswith("cuda:"):
+            device_index = int(device_map.split(":", 1)[1])
+        max_memory = {device_index: cfg.max_model_memory_per_gpu}
+        if getattr(cfg, "max_model_memory_cpu", None):
+            max_memory["cpu"] = cfg.max_model_memory_cpu
+        model_kwargs["max_memory"] = max_memory
+
+    model = AutoModelForCausalLM.from_pretrained(target_model_name, **model_kwargs)
+
+    if is_trainable and has_cuda and cfg.load_in_4bit:
+        model = prepare_model_for_kbit_training(
+            model,
+            use_gradient_checkpointing=cfg.gradient_checkpointing,
         )
-    else:
-        if not has_cuda:
-            logger.warning(
-                "CUDA is not available. Loading model in full/bfloat16 precision on CPU."
-            )
-        model = AutoModelForCausalLM.from_pretrained(
-            target_model_name,
-            device_map="auto" if has_cuda else "cpu",
-            torch_dtype=compute_dtype if has_cuda else torch.float32,
-            trust_remote_code=True,
+
+    if sft_adapter_path:
+        model = PeftModel.from_pretrained(
+            model,
+            sft_adapter_path,
+            is_trainable=False,
+            adapter_name="sft",
         )
+        if is_trainable:
+            model.add_adapter("rl", _lora_config(cfg))
+            if adapter_path:
+                model.load_adapter(adapter_path, adapter_name="rl", is_trainable=True)
+            model.set_adapter("rl")
+        elif adapter_path:
+            model.load_adapter(adapter_path, adapter_name="rl", is_trainable=False)
+            model.set_adapter("rl")
+        else:
+            model.set_adapter("sft")
+    elif adapter_path:
+        model = PeftModel.from_pretrained(
+            model,
+            adapter_path,
+            is_trainable=is_trainable,
+            adapter_name="rl",
+        )
+        model.set_adapter("rl")
+    elif is_trainable:
+        model = get_peft_model(model, _lora_config(cfg))
 
     if is_trainable:
-        if has_cuda and cfg.load_in_4bit:
-            model = prepare_model_for_kbit_training(
-                model,
-                use_gradient_checkpointing=cfg.gradient_checkpointing,
-            )
-
-        lora_config = LoraConfig(
-            r=cfg.lora_r,
-            lora_alpha=cfg.lora_alpha,
-            lora_dropout=cfg.lora_dropout,
-            bias=cfg.lora_bias,
-            target_modules=cfg.target_modules,
-            task_type="CAUSAL_LM",
-        )
-        model = get_peft_model(model, lora_config)
+        _resync_trainable_dtype(model, dtype=torch.float32 if not is_bf16_supported else None)
+        model.config.use_cache = False
+        if cfg.gradient_checkpointing and not (has_cuda and cfg.load_in_4bit):
+            try:
+                model.gradient_checkpointing_enable(
+                    gradient_checkpointing_kwargs={"use_reentrant": False}
+                )
+            except TypeError:
+                model.gradient_checkpointing_enable()
         verify_trainable_parameters(model, target_model_name)
+    if hasattr(model, "generation_config") and model.generation_config is not None:
+        model.generation_config.use_cache = True
 
     return model, tokenizer
+
+
+def _resync_trainable_dtype(model: Any, dtype: Any) -> None:
+    if dtype is None:
+        return
+    for parameter in model.parameters():
+        if parameter.requires_grad:
+            parameter.data = parameter.data.to(dtype)
+
 
 def verify_trainable_parameters(model: Any, model_name: str) -> Tuple[int, int, float]:
     trainable_params = 0
     all_param = 0
-    for _, param in model.named_parameters():
-        all_param += param.numel()
-        if param.requires_grad:
-            trainable_params += param.numel()
+    for _, parameter in model.named_parameters():
+        all_param += parameter.numel()
+        if parameter.requires_grad:
+            trainable_params += parameter.numel()
 
     percentage = 100 * trainable_params / all_param if all_param > 0 else 0.0
     print(
@@ -101,10 +173,6 @@ def verify_trainable_parameters(model: Any, model_name: str) -> Tuple[int, int, 
         f"All params: {all_param:,} | Trainable: {percentage:.4f}%"
     )
 
-    if "30B" in model_name and trainable_params != EXPECTED_TRAINABLE_PARAMS:
-        logger.warning(
-            f"Trainable param count {trainable_params} deviates from "
-            f"expected {EXPECTED_TRAINABLE_PARAMS}."
-        )
-
+    if trainable_params == 0:
+        logger.warning("No trainable parameters detected after adapter setup.")
     return trainable_params, all_param, percentage

@@ -1,21 +1,18 @@
 import logging
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from data.tasks import TASKS
-from engine.benchmark import measure_speedup
-from engine.compiler import compile_kernel
-from engine.verifier import verify_numerical_correctness
-
-# Reward computation engine for Group Relative Policy Optimization training.
-# Executes two stage verification covering compilation, numerical equivalence, and latency.
-# Detailed taxonomy logs record contract failures and identify zero reward groups.
+from engine.benchmark import benchmark_kernel
+from engine.compiler import compile_kernel_ex
+from engine.verifier import verify_kernel
+from src.rewards.reward_engine import RewardEngine
 
 logger = logging.getLogger(__name__)
 
-# Global registry tracking failure taxonomy and zero reward group occurrences.
 ERROR_TAXONOMY: Dict[str, int] = defaultdict(int)
 GROUP_STATS: Dict[str, int] = defaultdict(int)
+
 
 def infer_task_id_from_prompt(prompt: str) -> str:
     prompt_lower = prompt.lower()
@@ -24,123 +21,185 @@ def infer_task_id_from_prompt(prompt: str) -> str:
             return task_id
     return "swish"
 
+
+def _taxonomy_for_status(status: str) -> str:
+    if status == "static_failed":
+        return "static_check_failed"
+    if status in {"compile_error", "runtime_unavailable"}:
+        return "compilation_failed"
+    if status in {"incorrect", "cache_or_incorrect"}:
+        return "numerical_divergence"
+    if status == "runtime_error":
+        return "runtime_crash"
+    if status in {
+        "unstable",
+        "timeout",
+        "fake_gain",
+        "implausible_speedup",
+        "measurement_too_small",
+    }:
+        return "timing_unstable"
+    if status == "sanitizer_error":
+        return "memory_safety"
+    if status == "ok":
+        return "success"
+    return "unknown"
+
+
+def _evaluate_direct(completion: str, task_id: str, config: Any = None) -> float:
+    compiled = compile_kernel_ex(completion)
+    if compiled.module is None:
+        ERROR_TAXONOMY[_taxonomy_for_status(compiled.status)] += 1
+        return 0.0
+
+    verification = verify_kernel(
+        compiled.module,
+        task_id,
+        device=getattr(config, "verifier_device", "cuda:0") if config else "cuda:0",
+        seeds=getattr(config, "verification_seeds", None) if config else None,
+        rtol=getattr(config, "numerical_rtol", None) if config else None,
+        atol=getattr(config, "numerical_atol", None) if config else None,
+    )
+    if not verification.correct:
+        ERROR_TAXONOMY[_taxonomy_for_status(verification.status)] += 1
+        return 0.0
+
+    benchmark = benchmark_kernel(
+        compiled.module,
+        task_id,
+        device=getattr(config, "verifier_device", "cuda:0") if config else "cuda:0",
+        warmup_iters=getattr(config, "benchmark_warmup_iters", 10) if config else 10,
+        num_blocks=getattr(config, "benchmark_num_blocks", 7) if config else 7,
+        runs_per_block=getattr(config, "benchmark_runs_per_block", 10) if config else 10,
+        variance_threshold=getattr(config, "variance_threshold", 0.005) if config else 0.005,
+        min_measurement_ms=getattr(config, "min_measurement_ms", 0.005) if config else 0.005,
+        use_bandwidth=getattr(config, "use_bandwidth", True) if config else True,
+        fake_gain_ratio=getattr(config, "fake_gain_ratio", 1.20) if config else 1.20,
+        max_plausible_speedup=getattr(config, "max_plausible_speedup", 10.0) if config else 10.0,
+    )
+    if benchmark.status != "ok" or not benchmark.stable:
+        ERROR_TAXONOMY[_taxonomy_for_status(benchmark.status)] += 1
+        return 0.0
+
+    ERROR_TAXONOMY["success"] += 1
+    return float(benchmark.speedup)
+
+
 def evaluate_single_completion(
     completion: str,
     task_id: str,
-    cross_gpu_validation: bool = True
+    config: Any = None,
+    dispatcher: Any = None,
 ) -> float:
-    # Stage 1: Static inspection and compilation
-    module, compile_status = compile_kernel(completion)
-    if module is None:
-        is_static = any(
-            kw in compile_status for kw in ("Static inspection", "Missing", "Forbidden")
-        )
-        if is_static:
-            ERROR_TAXONOMY["static_check_failed"] += 1
+    if dispatcher is not None and config is not None:
+        engine = RewardEngine(config, dispatcher)
+        result = engine.evaluate_code(completion, task_id)
+        ERROR_TAXONOMY[_taxonomy_for_status(result.status)] += 1
+        return float(result.reward)
+    return _evaluate_direct(completion, task_id, config=config)
+
+
+def _flatten_completions(completions: List[Any]) -> List[str]:
+    flat: List[str] = []
+    for completion in completions:
+        if isinstance(completion, list) and completion and isinstance(completion[0], dict):
+            flat.append(completion[0].get("content", ""))
+        elif isinstance(completion, dict):
+            flat.append(completion.get("content", ""))
         else:
-            ERROR_TAXONOMY["compilation_failed"] += 1
-        return 0.0
+            flat.append(str(completion))
+    return flat
 
-    # Stage 2: Numerical validation
-    passed_num, num_status = verify_numerical_correctness(module, task_id)
-    if not passed_num:
-        if "Runtime error" in num_status:
-            ERROR_TAXONOMY["runtime_crash"] += 1
-        else:
-            ERROR_TAXONOMY["numerical_divergence"] += 1
-        return 0.0
 
-    # Stage 3: Latency measurement and stability gate
-    speedup, is_stable = measure_speedup(module, task_id, device="cuda")
-    if not is_stable or speedup <= 0.0:
-        ERROR_TAXONOMY["timing_unstable"] += 1
-        return 0.0
+def _resolve_task_ids(
+    prompts: List[str],
+    num_samples: int,
+    task_id_arg: Any,
+    fallback_prompt: str,
+) -> List[str]:
+    task_ids: Optional[List[str]] = None
+    if isinstance(task_id_arg, list):
+        if len(task_id_arg) == num_samples:
+            task_ids = [str(value) for value in task_id_arg]
+        elif task_id_arg and num_samples % len(task_id_arg) == 0:
+            repeat = num_samples // len(task_id_arg)
+            task_ids = [str(value) for value in task_id_arg for _ in range(repeat)]
+    elif isinstance(task_id_arg, str):
+        task_ids = [task_id_arg] * num_samples
 
-    # Cross-GPU validation gate if multiple GPUs are detected
-    if cross_gpu_validation:
-        try:
-            import torch
-            if torch.cuda.device_count() > 1 and speedup > 3.0:
-                speedup_gpu1, stable_gpu1 = measure_speedup(module, task_id, device="cuda:1")
-                if not stable_gpu1 or abs(speedup - speedup_gpu1) / speedup > 0.10:
-                    ERROR_TAXONOMY["cross_gpu_mismatch"] += 1
-                    return 0.0
-        except Exception:
-            pass
+    if task_ids is None:
+        task_ids = []
+        for prompt in prompts:
+            inferred = infer_task_id_from_prompt(prompt or fallback_prompt)
+            task_ids.append(inferred)
+    return task_ids
 
-    ERROR_TAXONOMY["success"] += 1
-    return float(speedup)
 
 def compute_grpo_rewards(
     prompts: Optional[List[str]] = None,
     completions: Optional[List[Any]] = None,
-    **kwargs: Any
+    **kwargs: Any,
 ) -> List[float]:
-    # Handle variations in TRL completion argument formats
+    config = kwargs.pop("config", None)
+    dispatcher = kwargs.pop("dispatcher", None)
     if completions is None:
         completions = kwargs.get("candidate_completions", [])
 
-    flat_completions: List[str] = []
-    for comp in completions:
-        if isinstance(comp, list) and len(comp) > 0 and isinstance(comp[0], dict):
-            flat_completions.append(comp[0].get("content", ""))
-        elif isinstance(comp, dict):
-            flat_completions.append(comp.get("content", ""))
-        else:
-            flat_completions.append(str(comp))
-
+    flat_completions = _flatten_completions(completions)
     num_samples = len(flat_completions)
 
-    # Replicate prompts if TRL provides 1 prompt per batch with G completions
     if prompts is not None and len(prompts) > 0:
         if len(prompts) != num_samples and num_samples % len(prompts) == 0:
             repeat = num_samples // len(prompts)
-            prompts = [p for p in prompts for _ in range(repeat)]
+            prompts = [prompt for prompt in prompts for _ in range(repeat)]
         elif len(prompts) != num_samples:
-            default_prompt = kwargs.get("prompt", "")
-            prompts = [default_prompt] * num_samples
+            prompts = [kwargs.get("prompt", "")] * num_samples
     else:
-        fallback_prompt = kwargs.get("prompt", "")
-        prompts = [fallback_prompt] * num_samples
+        prompts = [kwargs.get("prompt", "")] * num_samples
 
-    # Check if task_id was passed directly via dataset column
-    task_ids: Optional[List[str]] = None
-    if "task_id" in kwargs:
-        tid_arg = kwargs["task_id"]
-        if isinstance(tid_arg, list):
-            if len(tid_arg) == num_samples:
-                task_ids = tid_arg
-            elif len(tid_arg) > 0 and num_samples % len(tid_arg) == 0:
-                repeat = num_samples // len(tid_arg)
-                task_ids = [t for t in tid_arg for _ in range(repeat)]
-        elif isinstance(tid_arg, str):
-            task_ids = [tid_arg] * num_samples
+    task_ids = _resolve_task_ids(
+        prompts, num_samples, kwargs.get("task_id"), kwargs.get("prompt", "")
+    )
 
     rewards: List[float] = []
-    for idx, (prompt, comp) in enumerate(zip(prompts, flat_completions)):
-        if task_ids and idx < len(task_ids):
-            task_id = task_ids[idx]
-        else:
-            task_id = infer_task_id_from_prompt(prompt)
-        reward = evaluate_single_completion(comp, task_id)
+    for prompt, completion, task_id in zip(prompts, flat_completions, task_ids):
+        reward = evaluate_single_completion(
+            completion,
+            task_id,
+            config=config,
+            dispatcher=dispatcher,
+        )
         rewards.append(reward)
 
-    # Detect and record zero reward collapse within groups of size G=2
-    if len(rewards) >= 2:
-        for i in range(0, len(rewards), 2):
-            group = rewards[i:i + 2]
-            if len(group) == 2:
+    group_size = int(kwargs.get("group_size", 2))
+    if group_size > 1:
+        for index in range(0, len(rewards), group_size):
+            group = rewards[index : index + group_size]
+            if len(group) == group_size:
                 GROUP_STATS["total_groups"] += 1
-                if all(r == 0.0 for r in group):
+                if all(reward == 0.0 for reward in group):
                     GROUP_STATS["zero_reward_groups"] += 1
 
     return rewards
+
+
+def make_reward_function(config: Any, dispatcher: Any) -> Callable[..., List[float]]:
+    def kernel_reward(prompts=None, completions=None, **kwargs):
+        kwargs["config"] = config
+        kwargs["dispatcher"] = dispatcher
+        kwargs.setdefault("group_size", config.effective_group_size())
+        return compute_grpo_rewards(prompts=prompts, completions=completions, **kwargs)
+
+    kernel_reward.__name__ = "kernel_reward"
+    return kernel_reward
+
 
 def get_taxonomy_summary() -> Dict[str, Any]:
     return {
         "error_taxonomy": dict(ERROR_TAXONOMY),
         "group_stats": dict(GROUP_STATS),
     }
+
 
 def reset_taxonomy_stats() -> None:
     ERROR_TAXONOMY.clear()

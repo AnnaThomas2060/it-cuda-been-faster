@@ -2,134 +2,247 @@
 
 Graduate research project by Anna Thomas, Mohamed Ziyadh Mohamed, and Pramod Goyal.
 
-Reinforcement learning training, two-stage reward design, and greedy evaluation pipeline for training coding large language models to generate high-performance custom CUDA kernels.
+Reinforcement learning training, a two-stage reward gate, and multi-turn evaluation for training coding language models to generate high-performance custom CUDA kernels.
 
 ## Motivation
 
-Most inference code for LLMs uses significantly less compute than the theoretical limit of modern GPU hardware. Writing high-performance CUDA kernels requires specialized expertise and is hardware specific, making porting across architectures labor intensive. This project trains small language models (SLMs) using LoRA, SinkGD, multi-turn reinforcement learning with thought masking, and contrastive RL to automate CUDA kernel optimization and help maximize hardware efficiency on NVIDIA GPUs.
+Most inference code for large language models uses significantly less compute than the theoretical limit of modern GPU hardware. Writing high-performance CUDA kernels requires specialized expertise and is hardware specific, which makes porting across architectures labor intensive. This project trains small language models with LoRA and reinforcement learning to automate CUDA kernel optimization and increase hardware efficiency on NVIDIA GPUs.
 
 ## Team Roles
 
 | Team Member | Module Path | Primary Responsibilities |
 | :--- | :--- | :--- |
-| Anna Thomas | `engine/`, `rewards/`, `models/`, `configs/`, `train_grpo.py`, `evaluate.py` | RL pipeline orchestration, reward design, anti-hacking rules, contrastive GRPO training, and evaluation. |
-| Mohamed Ziyadh Mohamed | `src/baselines/`, `src/analytics/` | Hand-crafted CUDA reference baselines, reward tracking, Roofline utilization analysis, and fake-gain detection. |
-| Pramod Goyal | `src/verifier/` | Sandboxed GPU compilation harness (nvcc), execution correctness verification, and CUPTI / CUDA Events latency profiler. |
+| Anna Thomas | `engine/`, `rewards/`, `models/`, `configs/`, `src/pipeline/`, `src/rewards/`, `src/trainers/`, `train_grpo.py`, `evaluate.py` | RL orchestration, multi-turn rollouts, reward design, anti-hacking guards, Dr. GRPO and contrastive training, evaluation, and cluster tooling. |
+| Mohamed Ziyadh Mohamed | `src/baselines/`, `src/analytics/` | Hand-written CUDA reference baselines, telemetry analysis, roofline utilization, and fake-gain auditing. |
+| Pramod Goyal | `src/verifier/` | Sandboxed GPU compilation, correctness verification, and CUDA Events profiling. |
 
-## Overview and Experimental Arms
+## Experimental Arms
 
-This repository implements the RL training and reward pipeline for Anna Thomas's component of the MSAI635 project. The research investigates whether conditioning the model on previous implementations and their measured performance scores (contrastive RL) helps it generate faster CUDA kernels compared to task specifications alone.
+The project asks whether conditioning a model on earlier implementations and their measured performance helps it produce faster kernels than a task specification alone.
 
-1. **Arm A (Scored Context / Contrastive GRPO):** The prompt contains the PyTorch task specification along with historical same-task implementations and their measured relative speedup scores.
-2. **Arm B (Reference Only GRPO):** The prompt contains only the PyTorch task specification and interface contract without historical implementations.
+1. **Arm A (Contrastive):** the prompt includes the task specification and stored teachers with measured speedups.
+2. **Arm B (Reference only):** the prompt includes only the task specification and interface contract.
 
-Both experimental conditions utilize identical base weights, LoRA attention adapters, optimizer hyperparameter states, random seeds (635), task schedules, and latency gates.
+Both arms use the same base weights, LoRA configuration, seed, task schedule, turn budget, and benchmark gates. Holdout tasks now have stored teachers, so the Arm A and Arm B comparison remains valid on both training and holdout splits.
 
-## Architecture and Modules
+## Pipeline Overview
+
+```text
+task prompt
+    |
+    v
+RolloutManager  ->  RewardEngine  ->  dispatcher  ->  compiler, verifier, benchmark
+    ^                                                        |
+    |                                                        v
+    +---------------- trajectory state and rewards <---------+
+                             |
+                             v
+              MultiTurnGRPOTrainer or ContrastiveRLTrainer
+```
+
+The rollout manager generates one completion per active turn, extracts the code block, and requests an evaluation. The reward engine applies the correctness and stability gates, records telemetry, and updates the contrastive archive. The trainer converts turn rewards into discounted returns, normalizes advantages inside each task and turn group, and performs Dr. GRPO updates. Contrastive mode adds a pairwise preference loss over archived winner and loser kernels.
+
+## Repository Layout
 
 ```text
 it-cuda-been-faster/
-├── .github/workflows/ci.yml   # GitHub Actions CI workflow
-├── configs/                   # Hyperparameters, LoRA targets, and benchmark gates
-│   ├── grpo_config.py         # Central Python dataclass configuration
-│   ├── sft_lora.yaml          # Stage 1 LoRA SFT hyperparameters
-│   ├── rest.yaml              # Branch A ReST hyperparameters
-│   ├── multiturn_grpo.yaml    # Branch B Multi-Turn Dr. GRPO hyperparameters
-│   └── contrastive_rl.yaml    # Branch C Contrastive-RL hyperparameters
-├── data/                      # Task registry, reference implementations, and teacher store
-│   ├── tasks.py               # KernelBench task registry, PyTorch refs, and shapes
-│   ├── example_store.py       # Curated teacher kernels with baseline speedup metrics
-│   └── README.md              # Data module overview
-├── docs/                      # Architectural specifications and IPC contracts
-│   ├── ARCHITECTURE.md        # Detailed multi-turn pipeline and reward design
-│   └── CONTRACTS.md           # Inter-vertical Pydantic data schemas
-├── engine/                    # Execution, compilation, verification, and timing engine
-│   ├── prompt_builder.py      # Reference-only and contrastive prompt generators
-│   ├── compiler.py            # Static contract checker and load_inline compiler
-│   ├── verifier.py            # Multi-shape, multi-seed numerical equivalence suite
-│   └── benchmark.py           # 7-block chronological latency timer with variance filter
-├── rewards/                   # Reward functions and taxonomy tracking
-│   └── grpo_reward.py         # TRL-compatible reward callback and failure taxonomy logger
-├── models/                    # Model loading and LoRA adapters
-│   └── loader.py              # 4-bit NF4 base model loader with rank-8 LoRA adapter
-├── notebooks/                 # Interactive Jupyter notebooks
-│   └── colab_rl_pipeline.ipynb # Ready-to-run notebook for Google Colab Pro
-├── scripts/                   # Helper scripts and entrypoints
-│   └── README.md              # Scripts module overview
-├── src/                       # Team shared scaffolding and contracts
-│   ├── contracts/             # Typed IPC schemas and offline mock verifier
-│   ├── pipeline/              # Multi-turn rollout manager and env dispatcher
-│   ├── rewards/               # Anti-hacking guards, speedup metrics, and archive
-│   ├── trainers/              # LoRA, SinkGD, SFT, ReST, GRPO, Contrastive trainers
-│   ├── verifier/              # Sandboxed GPU compilation and profiler (Pramod)
-│   ├── baselines/             # Reference CUDA kernel baselines (Ziyadh)
-│   └── analytics/             # Telemetry analysis and fake-gain auditing (Ziyadh)
-├── tests/                     # Unit test suites
-│   ├── test_pipeline.py       # Unit test suite verifying RL pipeline components
-│   └── test_smoke_imports.py  # Smoke tests for scaffolding and contracts
-├── train_grpo.py              # Main training script for matched baseline runs
-├── evaluate.py                # Greedy evaluation script computing coverage and speedups
-├── requirements.txt           # Pinned software stack
-└── pyproject.toml             # Package configuration
+|-- configs/
+|   |-- grpo_config.py            # ExperimentConfig dataclass
+|   |-- multiturn_grpo.yaml       # Multi-turn Dr. GRPO
+|   |-- contrastive_rl.yaml       # Contrastive RL
+|   |-- sft_lora.yaml             # Stage 1 SFT
+|   `-- rest.yaml                 # ReST branch
+|-- data/
+|   |-- tasks.py                  # Task registry, references, shapes, tolerances
+|   |-- example_store.py          # Teacher kernels and measurement overrides
+|   `-- README.md
+|-- docs/
+|   |-- ARCHITECTURE.md
+|   `-- CONTRACTS.md
+|-- engine/
+|   |-- compiler.py               # Static checks and load_inline compilation
+|   |-- verifier.py               # Multi-shape, multi-seed numerical verification
+|   |-- benchmark.py              # Blocked CUDA Events timing and anti-cache checks
+|   |-- sanitizer.py              # Optional compute-sanitizer runner
+|   |-- worker.py                 # Verifier worker process
+|   |-- prompt_builder.py         # Reference-only and contrastive chat prompts
+|   `-- utils.py                  # Seeding, JSONL, metadata, and timing helpers
+|-- models/
+|   `-- loader.py                 # 4-bit base model, SFT handoff, trainable RL adapter
+|-- notebooks/
+|   `-- colab_rl_pipeline.ipynb
+|-- rewards/
+|   `-- grpo_reward.py            # TRL-compatible reward callback and taxonomy
+|-- scripts/
+|   |-- check_env.py
+|   |-- verify_teachers.py
+|   |-- compare_arms.py
+|   `-- slurm/
+|-- src/
+|   |-- contracts/                # Pydantic request, response, and trajectory models
+|   |-- pipeline/                 # Rollout manager, trajectory state, dispatchers
+|   |-- rewards/                  # Reward engine, anti-hack checks, archive
+|   |-- trainers/                 # Loss functions, Dr. GRPO, contrastive trainer
+|   |-- verifier/                 # Teammate verifier scaffolding
+|   |-- baselines/                # Teammate baseline kernels
+|   `-- analytics/                # Teammate telemetry analysis
+|-- tests/
+|   |-- test_pipeline.py
+|   |-- test_multiturn_pipeline.py
+|   `-- test_smoke_imports.py
+|-- train_grpo.py
+|-- evaluate.py
+|-- requirements.txt
+`-- pyproject.toml
 ```
 
-## Two-Stage Reward Gate
+## Reward and Timing Gates
 
-1. **Stage 1 (Correctness Gatekeeper):**
-   - **Static inspection:** Enforces `__global__` declaration, `torch::Tensor run_cuda` host signature, and forbids PyTorch operator shortcuts.
-   - **Compilation:** Compiles cleanly via `torch.utils.cpp_extension.load_inline` with `-O3` and `--use_fast_math`.
-   - **Numerical equivalence:** Verifies outputs across multiple tensor shapes and 4 seeded runs within 1e-4 tolerance (column max requires exact bitwise equality). Ensures input tensors are not mutated in place.
+1. **Static guard.** The source must declare a `__global__` kernel and a `torch::Tensor run_cuda(torch::Tensor x)` entrypoint. A whitelist rejects PyTorch operator shortcuts, tensor member calls, and manual CUDA allocation.
+2. **Compilation.** Candidate code is compiled with `torch.utils.cpp_extension.load_inline` using `-O3` and `--use_fast_math`.
+3. **Correctness.** Every configured shape and seed must match the reference. Column max requires exact equality. Other tasks use `rtol=1e-4` and `atol=1e-4`. Input mutation, output aliasing, wrong shape, wrong dtype, and non-finite values are rejected.
+4. **Timing.** Ten warmup iterations run on multiple input buffers, followed by seven chronological blocks of ten paired runs. Block ratio variance above 0.005 rejects the candidate. Measurements below 0.005 ms are rejected.
+5. **Fake gain and cache checks.** Achieved bandwidth is compared with the device peak, implausible speedups are rejected, and a post-timing correctness check runs on fresh inputs.
+6. **Optional sanitizer.** `compute-sanitizer` memcheck can be enabled for additional memory safety checks.
 
-2. **Stage 2 (Latency Benchmarking and Noise Gate):**
-   - Executes 10 warmup iterations on the target GPU.
-   - Measures 7 chronological blocks of 10 paired timing runs with CUDA events.
-   - Calculates population variance across block ratios. If variance exceeds 0.005, the candidate is rejected as unstable (reward = 0.0).
-   - Floors stable speedups to two decimal places.
+For a compiled, correct, and stable kernel:
 
-## Setup and Installation
+```text
+reward = 0.30 + log1p(max(speedup - 1.0, 0.0)) + 0.10 * bandwidth_delta
+```
 
-Install dependencies in a Python 3.10+ environment:
+The reward is clipped to 2.0 by default. Failed candidates receive zero.
+
+## Setup
+
+Use Python 3.10 or newer with a CUDA capable PyTorch installation.
 
 ```bash
 pip install -r requirements.txt
 pip install -e .
 ```
 
-Ensure the PyTorch CUDA allocator is configured to reduce memory fragmentation:
+Set the allocator flag used by the training and worker processes:
 
 ```bash
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 ```
 
-## Running on Google Colab Pro
-
-Open `notebooks/colab_rl_pipeline.ipynb` in Google Colab with an A100 GPU runtime. Step through the cells to verify teacher kernels, test prompt generation, load the quantized model, and train both experimental arms.
-
-## Running from Command Line
-
-Execute matched GRPO training runs:
+Run the preflight check before a long job:
 
 ```bash
-# Train Arm A (Contrastive Scored Context)
-python train_grpo.py --arm arm_a --use_dev_model
-
-# Train Arm B (Reference Only)
-python train_grpo.py --arm arm_b --use_dev_model
+python scripts/check_env.py --config configs/multiturn_grpo.yaml
 ```
 
-Run greedy evaluation:
+On a CPU only machine use `--allow_cpu` to inspect packages, configs, and imports without failing on CUDA.
+
+## Teacher Verification
+
+Stored teacher kernels are useful only when their speedups were measured on the target GPU. Measure them once and write the overrides:
 
 ```bash
-python evaluate.py --adapter_path ./outputs/arm_a_contrastive/final_adapter --prompt_mode contrastive
-python evaluate.py --adapter_path ./outputs/arm_b_reference_only/final_adapter --prompt_mode reference_only
+python scripts/verify_teachers.py --config configs/multiturn_grpo.yaml --device cuda:0
 ```
 
-Run unit tests:
+This writes `data/teacher_measurements.json`. The prompt builder reads that file and marks measured entries as verified. Unverified placeholders remain visible in the prompt with an `(unverified)` note.
+
+## Training
+
+Train both matched arms with the multi-turn config:
 
 ```bash
-pytest tests/
-python tests/test_pipeline.py
+python train_grpo.py \
+  --arm both \
+  --mode multi_turn \
+  --config configs/multiturn_grpo.yaml \
+  --dispatcher subprocess
 ```
+
+Useful options:
+
+- `--mode single_turn|multi_turn|contrastive`
+- `--use_dev_model` or `--use_tiny_model` for smaller local tests
+- `--dry_run` for one step
+- `--dispatcher auto|subprocess|in_process|mock`
+- `--device cuda:0` and `--verifier_device cuda:1`
+- `--resume_from_checkpoint <checkpoint-dir>`
+- `--sft_adapter_path <adapter-or-merged-model>`
+- `--output_dir <dir>`
+
+On a single GPU set both device fields to the same value and prefer `in_process` or a single subprocess worker. On a two GPU node the YAML defaults use `cuda:0` for training and `cuda:1` for verification.
+
+Checkpoints contain the adapter, tokenizer, optimizer, scheduler, and RNG state. Each arm writes its own archive derived from `archive_path`, so Arm A and Arm B do not share anchors and the files survive a preemption.
+
+## SFT Handoff
+
+The RL stage accepts either a PEFT adapter directory or a merged full model checkpoint from the SFT owner.
+
+```bash
+python train_grpo.py \
+  --arm arm_a \
+  --config configs/multiturn_grpo.yaml \
+  --sft_adapter_path outputs/sft/final_adapter
+```
+
+An adapter is frozen as the `sft` adapter and a fresh `rl` adapter is attached for training. A merged checkpoint is treated as the base model. The same path can be supplied through `sft_adapter_path` in a YAML file.
+
+## Evaluation
+
+Evaluate a trained adapter on the configured training and holdout tasks:
+
+```bash
+python evaluate.py \
+  --config configs/multiturn_grpo.yaml \
+  --adapter_path outputs/arm_a_contrastive/final_adapter \
+  --prompt_mode contrastive \
+  --dispatcher subprocess \
+  --output_file outputs/eval_results/arm_a.json
+```
+
+Reports include correctness rate, attempt correctness rate, the fraction of tasks at or above 1.0x and 1.1x, median and mean speedup, interquartile speedups, a bootstrap confidence interval for the median, and per-split summaries. Add `--base_model_control` to evaluate the base model without an adapter.
+
+Compare the two arms with paired per-task statistics:
+
+```bash
+python scripts/compare_arms.py \
+  --arm_a outputs/eval_results/arm_a.json \
+  --arm_b outputs/eval_results/arm_b.json \
+  --split all \
+  --output outputs/eval_results/comparison.json
+```
+
+The comparison reports wins, ties, losses, paired median difference, and a bootstrap interval. Use `--split holdout` for the generalization claim.
+
+## Cluster and Container Runs
+
+SLURM templates are in `scripts/slurm/`. The standard template runs preflight, both arms, both evaluations, and the paired comparison. The Apptainer template runs the same commands inside a container with `--nv`.
+
+```bash
+mkdir -p logs outputs/eval_results
+sbatch scripts/slurm/train_grpo.slurm
+```
+
+Adjust the `#SBATCH` partition, account, GPU type, walltime, and module names for your site. See `scripts/slurm/README.md` and `scripts/README.md` for details.
+
+## Google Colab
+
+`notebooks/colab_rl_pipeline.ipynb` verifies the toolchain, measures teacher kernels, inspects prompts, accepts an optional SFT handoff, runs a dry run, trains both arms, evaluates them, and prints the comparison. It uses a single GPU by default.
+
+## Tests
+
+```bash
+python -m pytest tests -q
+python -m ruff check .
+```
+
+The suite covers task registration, teacher storage, prompt construction, static checks, reward shaping, the archive, dispatcher contracts, log probability gathering, GRPO and DPO losses, rollout sample construction, evaluation statistics, notebook structure, and repository text hygiene. It does not require CUDA.
+
+## Known Limitations
+
+- The custom trainer targets one training GPU. Multi-GPU DDP is not implemented.
+- Generation uses the Hugging Face `generate` API. A paged vLLM backend is not included.
+- Placeholder teacher speedups must be replaced with measurements on the target GPU before reporting results.
+- `compute-sanitizer` availability and SLURM module names vary by cluster.
 
 ## References
 

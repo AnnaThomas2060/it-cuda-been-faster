@@ -34,8 +34,8 @@ from rewards.grpo_reward import (  # noqa: E402
 # Checks task registration, teacher example retrieval, prompt construction, and static code filters.
 # Runs in lightweight test environments without requiring an active CUDA runtime.
 
-class TestPipelineComponents(unittest.TestCase):
 
+class TestPipelineComponents(unittest.TestCase):
     def test_task_registry(self):
         training_tasks = list_task_ids(training_only=True)
         self.assertIn("swish", training_tasks)
@@ -250,6 +250,7 @@ class TestPipelineComponents(unittest.TestCase):
                 param.data = param.data.to(target_dtype)
 
         self.assertEqual(linear.weight.dtype, torch.float32)
+
 
 if __name__ == "__main__":
     unittest.main()

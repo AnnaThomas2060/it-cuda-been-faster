@@ -1,6 +1,18 @@
-"""Static AST anti-hacking rules, gated speedup rewards, and MDP returns.
+"""Reward shaping, anti-hacking checks, and contrastive archive helpers."""
 
-Implements reward shaping and contrastive archive pairing for kernels.
-"""
+from src.rewards.archive import ArchiveEntry, ContrastiveArchive
+from src.rewards.reward_engine import (
+    RewardEngine,
+    RewardResult,
+    assign_discounted_returns,
+    group_normalize,
+)
 
-__all__: list[str] = []
+__all__ = [
+    "ArchiveEntry",
+    "ContrastiveArchive",
+    "RewardEngine",
+    "RewardResult",
+    "assign_discounted_returns",
+    "group_normalize",
+]

@@ -1,20 +1,68 @@
-# Multi-Turn Dr. GRPO Configuration with Thought Masking
-# Policy gradient optimization over multi-turn refinement trajectories.
-model_name_or_path: "Qwen/Qwen2.5-Coder-7B-Instruct"
+# Multi-turn Dr. GRPO configuration.
+# All keys must exist on ExperimentConfig in configs/grpo_config.py.
+mode: multi_turn
+
+base_model_name: "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+dev_model_name: "Qwen/Qwen2.5-Coder-7B-Instruct"
+use_dev_model: false
+
 lora_r: 64
 lora_alpha: 128
-batch_tasks: 8
-group_size: 16
-train_turns: 4
-eval_turns: 8
-gamma_discount: 0.4
-correctness_bonus: 0.30
-bw_bonus_weight: 0.10
-dr_grpo_l_norm: 16384
-clip_eps_low: 0.20
-clip_eps_high: 0.28
-kl_coeff: 0.0
+lora_dropout: 0.05
+target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+
 learning_rate: 2.0e-6
-max_grad_norm: 0.05
-max_seq_length: 8192
+weight_decay: 0.01
+beta: 0.0
+group_size: 16
+num_generations: 16
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+max_steps: 100
+training_passes: 2
+tasks_per_step: 8
+rollout_batch_size: 8
+max_prompt_length: 4096
+max_completion_length: 4096
+temperature: 0.8
+top_p: 0.95
 seed: 42
+save_steps: 25
+save_total_limit: 2
+logging_steps: 1
+
+num_turns: 4
+eval_turns: 8
+gamma: 0.4
+gamma_discount: 0.4
+early_stop_speedup: 2.0
+
+reward_mode: shaped
+correctness_bonus: 0.30
+bandwidth_weight: 0.10
+dr_grpo_l_norm: 16384
+epsilon: 0.20
+epsilon_high: 0.28
+max_grad_norm: 0.05
+
+benchmark_warmup_iters: 10
+benchmark_num_blocks: 7
+benchmark_runs_per_block: 10
+variance_threshold: 0.005
+use_verifier_worker: true
+verifier_workers: 1
+device: "cuda:0"
+verifier_device: "cuda:1"
+
+archive_path: "./outputs/contrastive_archive.jsonl"
+telemetry_path: "./logs/trajectory_telemetry.jsonl"
+output_dir_arm_a: "./outputs/arm_a_contrastive"
+output_dir_arm_b: "./outputs/arm_b_reference_only"
+eval_output_dir: "./outputs/eval_results"

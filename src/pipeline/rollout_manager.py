@@ -136,10 +136,17 @@ class RolloutManager:
             completion_lengths,
             logit_offset=logit_offset,
         )
+        # Free the large [batch, keep_last, vocab] logits tensor before copying the
+        # per-token scalars back to the CPU. This is the dominant rollout-time
+        # allocation for large-vocab models and the main single-GPU OOM risk.
+        del logits
         results: List[List[float]] = []
         for row in range(generated_ids.shape[0]):
             length = completion_lengths[row]
             results.append([float(value) for value in token_logprobs[row, :length].tolist()])
+        del token_logprobs
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         return results
 
     def _prepare_turn_records(
@@ -238,6 +245,8 @@ class RolloutManager:
         num_turns: Optional[int] = None,
         do_sample: bool = True,
     ) -> List[Trajectory]:
+        import torch
+
         group_size = group_size or self.config.effective_group_size()
         num_turns = num_turns or self.config.num_turns
         trajectories = [
@@ -274,6 +283,12 @@ class RolloutManager:
                     turn_index,
                     do_sample,
                 )
+                # Release this batch's generation tensors before the next batch so
+                # peak VRAM stays bounded by one rollout batch rather than the whole
+                # active set. Matters most on single-GPU Colab runs.
+                del input_ids, attention_mask, output_ids
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
         for trajectory in trajectories:
             trajectory.compute_returns(self.config.gamma)

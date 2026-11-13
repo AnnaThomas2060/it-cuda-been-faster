@@ -87,6 +87,17 @@ def load_model_and_tokenizer(
             bnb_4bit_compute_dtype=compute_dtype,
         )
 
+    # Optional memory cap to leave headroom for activations and a co-resident
+    # verifier on a single GPU. Only applied when explicitly configured.
+    if has_cuda and getattr(cfg, "max_model_memory_per_gpu", None):
+        device_index = 0
+        if isinstance(device_map, str) and device_map.startswith("cuda:"):
+            device_index = int(device_map.split(":", 1)[1])
+        max_memory = {device_index: cfg.max_model_memory_per_gpu}
+        if getattr(cfg, "max_model_memory_cpu", None):
+            max_memory["cpu"] = cfg.max_model_memory_cpu
+        model_kwargs["max_memory"] = max_memory
+
     model = AutoModelForCausalLM.from_pretrained(target_model_name, **model_kwargs)
 
     if is_trainable and has_cuda and cfg.load_in_4bit:

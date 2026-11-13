@@ -37,8 +37,12 @@ class TurnRecord:
     discounted_return: float = 0.0
     advantage: float = 0.0
 
-    def to_sample(self) -> TurnStepSample:
+    def to_sample(
+        self, task_id: str = "", prompt_mode: str = "reference_only"
+    ) -> TurnStepSample:
         return TurnStepSample(
+            task_id=task_id,
+            prompt_mode=prompt_mode,
             turn_index=self.turn_index,
             prompt=self.prompt,
             thought=self.thought,
@@ -103,7 +107,7 @@ class Trajectory:
             trajectory_id=self.trajectory_id,
             task_id=self.task_id,
             prompt_mode=self.prompt_mode,
-            steps=[step.to_sample() for step in self.steps],
+            steps=[step.to_sample(self.task_id, self.prompt_mode) for step in self.steps],
             best_code=self.best_code,
             best_speedup=self.best_speedup,
             best_status=self.best_status,

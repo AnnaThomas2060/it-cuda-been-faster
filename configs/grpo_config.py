@@ -133,6 +133,10 @@ class ExperimentConfig:
     benchmark_timeout_sec: int = 180
     torch_extensions_dir: Optional[str] = None
     max_worker_memory_gb: Optional[float] = None
+    # Optional per-GPU memory cap for the base model (e.g. "36GiB"). Leaves headroom
+    # for activations and a co-resident verifier. None lets the backend decide.
+    max_model_memory_per_gpu: Optional[str] = None
+    max_model_memory_cpu: Optional[str] = None
 
     archive_path: str = "./outputs/contrastive_archive.jsonl"
     archive_capacity_per_task: int = 16
@@ -196,11 +200,38 @@ class ExperimentConfig:
             raise ValueError("gamma must be in [0, 1]")
         if self.bf16 and self.fp16:
             raise ValueError("bf16 and fp16 are mutually exclusive")
+        if self.loss_type == "dr_grpo" and self.dr_grpo_l_norm <= 0:
+            raise ValueError("dr_grpo_l_norm must be > 0 for the dr_grpo loss")
+        if self.reward_clip <= 0:
+            raise ValueError("reward_clip must be positive")
+        if self.rollout_batch_size < 1:
+            raise ValueError("rollout_batch_size must be at least 1")
+        if self.verifier_workers < 1:
+            raise ValueError("verifier_workers must be at least 1")
+        if self.max_prompt_length < 1:
+            raise ValueError("max_prompt_length must be at least 1")
+        if self.max_teacher_examples < 0:
+            raise ValueError("max_teacher_examples must be non-negative")
+        if self.pairwise_margin_weight < 0 or self.pairwise_beta < 0:
+            raise ValueError("pairwise_margin_weight and pairwise_beta must be non-negative")
         missing = [
             task for task in self.eval_tasks if task not in self.training_tasks + self.holdout_tasks
         ]
         if missing:
             raise ValueError(f"eval_tasks contains unregistered tasks: {missing}")
+        try:
+            from data.tasks import list_task_ids
+
+            registered = set(list_task_ids(training_only=False))
+            unregistered = [
+                task
+                for task in self.training_tasks + self.holdout_tasks
+                if task not in registered
+            ]
+            if unregistered:
+                raise ValueError(f"Config references unregistered tasks: {unregistered}")
+        except ImportError:
+            pass
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

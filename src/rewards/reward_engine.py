@@ -118,9 +118,7 @@ class RewardEngine:
             reward_clip=self.config.reward_clip,
         )
         status = response.status
-        if response.correct and response.stable and status == "ok":
-            status = "ok"
-        elif response.compiled and not response.correct:
+        if response.compiled and not response.correct:
             status = "incorrect"
         elif not response.compiled and status in {"", "unknown"}:
             status = "compile_error"

@@ -393,7 +393,11 @@ class MultiTurnGRPOTrainer:
     def save_checkpoint(self, step: int) -> None:
         checkpoint_dir = self.output_dir / f"checkpoint-{step}"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        self.model.save_pretrained(checkpoint_dir)
+        # Save only the RL adapter if we have multiple adapters (e.g., SFT + RL)
+        if hasattr(self.model, "peft_config") and "rl" in self.model.peft_config:
+            self.model.save_pretrained(checkpoint_dir, selected_adapters=["rl"])
+        else:
+            self.model.save_pretrained(checkpoint_dir)
         self.tokenizer.save_pretrained(checkpoint_dir)
         torch.save(
             {

@@ -75,7 +75,21 @@ def _resync_lora_dtype(model: Any, target_dtype: Any) -> None:
 def _save_adapter(model: Any, path: str) -> None:
     peft_config = getattr(model, "peft_config", None)
     if peft_config and "rl" in peft_config:
-        model.save_pretrained(path, selected_adapters=["rl"])
+        # Save only the rl adapter at the root of path.
+        # Extract rl adapter weights and config, save as standalone adapter.
+        from pathlib import Path
+
+        from safetensors.torch import save_file
+
+        Path(path).mkdir(parents=True, exist_ok=True)
+        # Get rl adapter state dict (keys have "rl." prefix)
+        state_dict = model.state_dict()
+        rl_state = {k.replace("rl.", ""): v for k, v in state_dict.items() if k.startswith("rl.")}
+        # Save weights
+        save_file(rl_state, Path(path) / "adapter_model.safetensors")
+        # Save config
+        rl_config = peft_config["rl"]
+        rl_config.save_pretrained(path)
     else:
         model.save_pretrained(path)
 

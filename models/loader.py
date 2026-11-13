@@ -52,6 +52,7 @@ def load_model_and_tokenizer(
     tokenizer_kwargs = {
         "trust_remote_code": cfg.trust_remote_code,
         "padding_side": "left",
+        "truncation_side": "left",
         "cache_dir": cfg.cache_dir,
         "local_files_only": cfg.local_files_only,
     }

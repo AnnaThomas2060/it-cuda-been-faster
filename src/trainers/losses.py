@@ -66,7 +66,13 @@ def grpo_loss(
     per_token_loss = -torch.min(surrogate_1, surrogate_2)
     weighted = per_token_loss * mask
     if loss_type == "dr_grpo":
-        denominator = float(l_norm) if l_norm else max(1.0, float(mask.sum().item()))
+        if l_norm is None or float(l_norm) <= 0.0:
+            raise ValueError(
+                "dr_grpo loss requires a positive l_norm; got "
+                f"{l_norm!r}. Set config.dr_grpo_l_norm to a positive value "
+                "instead of relying on sequence-length normalization."
+            )
+        denominator = float(l_norm)
         return weighted.sum() / denominator
     active = mask.sum().clamp(min=1.0)
     return weighted.sum() / active

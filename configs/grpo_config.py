@@ -119,9 +119,6 @@ class ExperimentConfig:
     benchmark_runs_per_block: int = 10
     variance_threshold: float = 0.005
     min_measurement_ms: float = 0.005
-    cross_gpu_validation: bool = False
-    cross_gpu_ratio_threshold: float = 3.0
-    cross_gpu_tolerance: float = 0.10
     enable_sanitizer: bool = False
     sanitizer_timeout_sec: int = 120
 

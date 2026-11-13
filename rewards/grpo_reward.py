@@ -88,7 +88,6 @@ def _evaluate_direct(completion: str, task_id: str, config: Any = None) -> float
 def evaluate_single_completion(
     completion: str,
     task_id: str,
-    cross_gpu_validation: bool = False,
     config: Any = None,
     dispatcher: Any = None,
 ) -> float:

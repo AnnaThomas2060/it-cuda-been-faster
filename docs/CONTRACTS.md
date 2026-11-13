@@ -112,7 +112,7 @@ The reward engine also writes a richer JSONL stream with code hashes, stability,
 
 ## 6. Offline Testing
 
-`MockVerifier` and `MockDispatcher` implement the same request and response contract without CUDA. They are intended for unit tests, notebook dry runs, and CI. `InProcessDispatcher` runs the real evaluation path without a worker process and is useful on a single GPU.
+`MockVerifier` lives in `src/contracts/__init__.py` and implements the request and response contract without CUDA. The dispatchers that exercise this contract live in `src/pipeline/env_dispatcher.py`: `MockDispatcher` returns canned responses for unit tests, notebook dry runs, and CI, while `InProcessDispatcher` runs the real evaluation path without a worker process and is useful on a single GPU. (`SubprocessDispatcher` and the `build_dispatcher` factory also live there.)
 
 ## 7. Compatibility Notes
 

@@ -1,6 +1,10 @@
-"""Isolated GPU compilation and hardware profiling vertical.
+"""Isolated GPU compilation, correctness verification and latency profiling.
 
-Owner: Pramod Goyal. Evaluates kernels via nvcc and CUDA events.
+Owner: Pramod Goyal. Importing this package does not import torch or touch
+the GPU; only the child worker process does.
 """
 
-__all__: list[str] = []
+from src.verifier.config import VerifierConfig
+from src.verifier.harness import KernelVerifier
+
+__all__ = ["KernelVerifier", "VerifierConfig"]

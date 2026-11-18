@@ -50,6 +50,17 @@ class KernelEvalResponse(BaseModel):
     error_message: Optional[str] = Field(
         default=None, description="Runtime or compilation failure message."
     )
+    failure_stage: Optional[str] = Field(
+        default=None,
+        description=(
+            "None on success, else one of: static_check, compile, incorrect, memcheck, "
+            "runtime_error, worker_crash, timeout, inter_block_variance_exceeded, "
+            "speedup_above_suspicious_threshold, cross_gpu_mismatch."
+        ),
+    )
+    extra: Dict[str, Any] = Field(
+        default_factory=dict, description="Verifier evidence: correctness counts, timing stats."
+    )
 
 
 class TurnStepSample(BaseModel):

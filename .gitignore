@@ -44,3 +44,4 @@ data/cuda_rl_corpus_500/tasks/
 .idea/
 .DS_Store
 *.swp
+.venv*/

@@ -1,21 +1,61 @@
+import json
 import logging
+import os
+import uuid
 from collections import defaultdict
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from data.tasks import TASKS
-from engine.benchmark import measure_speedup
-from engine.compiler import compile_kernel
-from engine.verifier import verify_numerical_correctness
+from src.contracts import KernelEvalRequest, KernelEvalResponse, TelemetryRecord
 
-# Reward computation engine for Group Relative Policy Optimization training.
-# Executes two stage verification covering compilation, numerical equivalence, and latency.
-# Detailed taxonomy logs record contract failures and identify zero reward groups.
+# Reward computation for Group Relative Policy Optimization training.
+# Every completion is sent to the process-isolated verifier (src/verifier),
+# which runs static checks, compilation, the correctness suite and paired
+# timing. The reward is the denoised speedup, or 0.0 on any failure.
 
 logger = logging.getLogger(__name__)
 
 # Global registry tracking failure taxonomy and zero reward group occurrences.
 ERROR_TAXONOMY: Dict[str, int] = defaultdict(int)
 GROUP_STATS: Dict[str, int] = defaultdict(int)
+
+# Verifier failure_stage -> taxonomy key (kept stable for existing logs).
+FAILURE_TAXONOMY = {
+    "static_check": "static_check_failed",
+    "compile": "compilation_failed",
+    "incorrect": "numerical_divergence",
+    "memcheck": "memcheck_failed",
+    "runtime_error": "runtime_crash",
+    "worker_crash": "runtime_crash",
+    "timeout": "timeout",
+    "inter_block_variance_exceeded": "timing_unstable",
+    "speedup_above_suspicious_threshold": "unverified_large_speedup",
+    "cross_gpu_mismatch": "cross_gpu_mismatch",
+}
+
+_VERIFIER: Optional[Any] = None
+_TELEMETRY_PATH: Optional[str] = os.environ.get("TELEMETRY_PATH")
+
+
+def configure_verifier(
+    verifier: Optional[Any] = None, telemetry_path: Optional[str] = None
+) -> None:
+    """Install the verifier (anything with `evaluate(request)`) and telemetry sink."""
+    global _VERIFIER, _TELEMETRY_PATH
+    _VERIFIER = verifier
+    if telemetry_path is not None:
+        _TELEMETRY_PATH = telemetry_path
+
+
+def get_verifier() -> Any:
+    global _VERIFIER
+    if _VERIFIER is None:
+        from src.verifier import KernelVerifier, VerifierConfig
+
+        _VERIFIER = KernelVerifier(VerifierConfig.training())
+    return _VERIFIER
+
 
 def infer_task_id_from_prompt(prompt: str) -> str:
     prompt_lower = prompt.lower()
@@ -24,52 +64,54 @@ def infer_task_id_from_prompt(prompt: str) -> str:
             return task_id
     return "swish"
 
+
+def _emit_telemetry(response: KernelEvalResponse, reward: float) -> None:
+    if not _TELEMETRY_PATH:
+        return
+    record = TelemetryRecord(
+        trajectory_id=str(uuid.uuid4()),
+        task_id=response.task_id,
+        turn_index=0,
+        speedup=response.speedup,
+        reward=reward,
+        compiled=response.compiled,
+        correct=response.correct,
+        memory_bandwidth_gbps=response.memory_bandwidth_gbps,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        extra={
+            "failure_stage": response.failure_stage,
+            "execution_time_ms": response.execution_time_ms,
+            "baseline_time_ms": response.baseline_time_ms,
+            "baseline_bandwidth_gbps": response.baseline_bandwidth_gbps,
+            "raw_speedup": (response.extra.get("timing") or {}).get("raw_speedup"),
+        },
+    )
+    os.makedirs(os.path.dirname(_TELEMETRY_PATH) or ".", exist_ok=True)
+    with open(_TELEMETRY_PATH, "a") as handle:
+        handle.write(json.dumps(record.model_dump()) + "\n")
+
+
 def evaluate_single_completion(
-    completion: str,
-    task_id: str,
-    cross_gpu_validation: bool = True
+    completion: str, task_id: str, device_id: Optional[int] = None
 ) -> float:
-    # Stage 1: Static inspection and compilation
-    module, compile_status = compile_kernel(completion)
-    if module is None:
-        is_static = any(
-            kw in compile_status for kw in ("Static inspection", "Missing", "Forbidden")
-        )
-        if is_static:
-            ERROR_TAXONOMY["static_check_failed"] += 1
-        else:
-            ERROR_TAXONOMY["compilation_failed"] += 1
-        return 0.0
+    # On a 2-GPU box, train on GPU 0 and set VERIFIER_DEVICE=1 so timing is
+    # not disturbed by the policy's own kernels.
+    if device_id is None:
+        device_id = int(os.environ.get("VERIFIER_DEVICE", "0"))
+    response = get_verifier().evaluate(
+        KernelEvalRequest(task_id=task_id, code=completion, device_id=device_id)
+    )
+    if response.failure_stage is None and response.speedup:
+        reward = float(response.speedup)
+        ERROR_TAXONOMY["success"] += 1
+    else:
+        reward = 0.0
+        ERROR_TAXONOMY[FAILURE_TAXONOMY.get(response.failure_stage, "unknown_failure")] += 1
+        logger.debug("task=%s failure=%s: %s", task_id, response.failure_stage,
+                     (response.error_message or "")[:200])
+    _emit_telemetry(response, reward)
+    return reward
 
-    # Stage 2: Numerical validation
-    passed_num, num_status = verify_numerical_correctness(module, task_id)
-    if not passed_num:
-        if "Runtime error" in num_status:
-            ERROR_TAXONOMY["runtime_crash"] += 1
-        else:
-            ERROR_TAXONOMY["numerical_divergence"] += 1
-        return 0.0
-
-    # Stage 3: Latency measurement and stability gate
-    speedup, is_stable = measure_speedup(module, task_id, device="cuda")
-    if not is_stable or speedup <= 0.0:
-        ERROR_TAXONOMY["timing_unstable"] += 1
-        return 0.0
-
-    # Cross-GPU validation gate if multiple GPUs are detected
-    if cross_gpu_validation:
-        try:
-            import torch
-            if torch.cuda.device_count() > 1 and speedup > 3.0:
-                speedup_gpu1, stable_gpu1 = measure_speedup(module, task_id, device="cuda:1")
-                if not stable_gpu1 or abs(speedup - speedup_gpu1) / speedup > 0.10:
-                    ERROR_TAXONOMY["cross_gpu_mismatch"] += 1
-                    return 0.0
-        except Exception:
-            pass
-
-    ERROR_TAXONOMY["success"] += 1
-    return float(speedup)
 
 def compute_grpo_rewards(
     prompts: Optional[List[str]] = None,

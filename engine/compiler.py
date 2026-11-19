@@ -43,7 +43,15 @@ def run_static_checks(code: str) -> Tuple[bool, str]:
             return False, f"Forbidden PyTorch shortcut detected: {shortcut}."
     return True, "Static inspection passed."
 
-def compile_kernel(code_or_completion: str, verbose: bool = False) -> Tuple[Optional[Any], str]:
+def compile_kernel(
+    code_or_completion: str,
+    verbose: bool = False,
+    module_name: Optional[str] = None,
+    build_directory: Optional[str] = None,
+) -> Tuple[Optional[Any], str]:
+    """Compile a completion. A fixed `module_name` + `build_directory` lets a
+    later process reuse the build; the default random name avoids in-process
+    symbol collisions."""
     code = extract_code_block(code_or_completion)
     passed_static, reason = run_static_checks(code)
     if not passed_static:
@@ -64,7 +72,7 @@ def compile_kernel(code_or_completion: str, verbose: bool = False) -> Tuple[Opti
     if "PYBIND11_MODULE" in code:
         code = re.sub(r"PYBIND11_MODULE\s*\([^)]*\)\s*\{[^}]*\}", "", code)
 
-    module_name = f"cuda_kernel_{uuid.uuid4().hex[:12]}"
+    module_name = module_name or f"cuda_kernel_{uuid.uuid4().hex[:12]}"
     cpp_source = """
     #include "torch/extension.h"
     torch::Tensor run_cuda(torch::Tensor x);
@@ -80,6 +88,7 @@ def compile_kernel(code_or_completion: str, verbose: bool = False) -> Tuple[Opti
             cuda_sources=code,
             functions=None,
             extra_cuda_cflags=["-O3", "--use_fast_math"],
+            build_directory=build_directory,
             verbose=verbose,
         )
         return module, "Compilation successful."

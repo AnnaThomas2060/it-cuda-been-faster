@@ -12,6 +12,7 @@ from engine.prompt_builder import build_prompt
 from models.loader import load_model_and_tokenizer
 from rewards.grpo_reward import (
     compute_grpo_rewards,
+    configure_verifier,
     get_taxonomy_summary,
     reset_taxonomy_stats,
 )
@@ -57,6 +58,8 @@ def run_grpo_training(
     logger.info(f"Target output directory: {output_dir}")
 
     reset_taxonomy_stats()
+    # One telemetry stream per arm, consumed by src/analytics.
+    configure_verifier(telemetry_path=os.path.join(output_dir, "telemetry.jsonl"))
 
     # Flush stale GPU allocations to reclaim all available VRAM
     gc.collect()

@@ -32,6 +32,8 @@ Returned by Pramod's verifier harness (`src/verifier/`) to Anna's pipeline (`src
 | `baseline_bandwidth_gbps`| `Optional[float]` | Baseline memory throughput in gigabytes per second. |
 | `compiler_output` | `str` | Diagnostic compiler messages, warnings, or nvcc logs. |
 | `error_message` | `Optional[str]` | Stack trace or failure description if execution failed. |
+| `failure_stage` | `Optional[str]` | `None` on a verified speedup; otherwise the stage that failed (see `src/verifier/README.md`). |
+| `extra` | `Dict[str, Any]` | Verifier evidence: correctness case counts, timing variance, raw speedup, pair count. |
 
 ## 3. Trajectory Step Sample (`TurnStepSample`)
 Tracks intermediate states within a single trajectory rollout.

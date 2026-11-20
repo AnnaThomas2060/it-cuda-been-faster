@@ -6,11 +6,10 @@ import time
 from typing import Any, Dict, List
 
 from configs.grpo_config import ExperimentConfig
-from engine.benchmark import measure_speedup
-from engine.compiler import compile_kernel
 from engine.prompt_builder import build_prompt
-from engine.verifier import verify_numerical_correctness
 from models.loader import load_model_and_tokenizer
+from src.contracts import KernelEvalRequest
+from src.verifier import KernelVerifier, VerifierConfig
 
 # Evaluates trained policy checkpoints across training and holdout evaluation tasks.
 # Uses greedy decoding without multi-turn repair to measure zero-shot kernel synthesis capability.
@@ -21,8 +20,12 @@ def evaluate_checkpoint(
     tokenizer: Any,
     task_keys: List[str],
     prompt_mode: str = "reference_only",
+    verifier: Any = None,
+    device_id: int = 0,
 ) -> Dict[str, Any]:
     import torch
+
+    verifier = verifier or KernelVerifier(VerifierConfig.evaluation())
 
     results_per_task: List[Dict[str, Any]] = []
     correct_count = 0
@@ -59,30 +62,23 @@ def evaluate_checkpoint(
         num_generated_tokens = len(gen_tokens)
         completion_text = tokenizer.decode(gen_tokens, skip_special_tokens=True)
 
-        # Stage 1: Compilation
-        compiled_module, compile_msg = compile_kernel(completion_text)
-        is_compiled = compiled_module is not None
-
-        # Stage 2: Numerical Verification
-        is_numerically_correct = False
-        num_msg = "Not compiled"
-        if is_compiled:
-            is_numerically_correct, num_msg = verify_numerical_correctness(compiled_module, tid)
+        # Compile, verify and time in an isolated worker (strict protocol).
+        response = verifier.evaluate(
+            KernelEvalRequest(task_id=tid, code=completion_text, device_id=device_id)
+        )
+        is_compiled = response.compiled
+        is_numerically_correct = response.correct
+        is_stable = response.failure_stage is None and response.speedup is not None
+        speedup = response.speedup if is_stable else 0.0
+        compile_msg = response.compiler_output
+        num_msg = response.error_message or "ok"
 
         if is_numerically_correct:
             correct_count += 1
-
-        # Stage 3: Latency Benchmarking
-        speedup = 0.0
-        is_stable = False
-        if is_numerically_correct:
-            speedup, is_stable = measure_speedup(compiled_module, tid, device="cuda")
-            if is_stable:
-                stable_speedups.append(speedup)
-                if speedup >= 1.0:
-                    fast_1_0_count += 1
-                if speedup >= 1.1:
-                    fast_1_1_count += 1
+        if is_stable:
+            stable_speedups.append(speedup)
+            fast_1_0_count += speedup >= 1.0
+            fast_1_1_count += speedup >= 1.1
 
         task_record = {
             "task_id": tid,
@@ -96,6 +92,7 @@ def evaluate_checkpoint(
             "generation_time_sec": round(elapsed_gen_time, 3),
             "tokens_per_sec": round(num_generated_tokens / max(elapsed_gen_time, 1e-4), 2),
             "completion": completion_text,
+            "verifier": response.model_dump(exclude={"compiler_output"}),
         }
         results_per_task.append(task_record)
 
@@ -132,6 +129,12 @@ def main():
         default="./outputs/eval_results/eval_summary.json",
         help="File path to save JSON evaluation metrics.",
     )
+    parser.add_argument("--verifier_device", type=int, default=0,
+                        help="GPU ordinal used to compile, validate and time kernels.")
+    parser.add_argument("--verification_device", type=int, default=None,
+                        help="Second GPU that must reproduce any speedup above 3x.")
+    parser.add_argument("--no_memcheck", action="store_true",
+                        help="Skip Compute Sanitizer (faster; not for reported results).")
     args = parser.parse_args()
 
     cfg = ExperimentConfig()
@@ -149,6 +152,11 @@ def main():
         tokenizer=tokenizer,
         task_keys=cfg.eval_tasks,
         prompt_mode=args.prompt_mode,
+        verifier=KernelVerifier(VerifierConfig.evaluation(
+            memcheck=not args.no_memcheck,
+            verification_device_id=args.verification_device,
+        )),
+        device_id=args.verifier_device,
     )
 
     output_dir = os.path.dirname(args.output_file)

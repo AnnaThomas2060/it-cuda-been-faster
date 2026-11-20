@@ -13,10 +13,14 @@ Modes:
 
 import hashlib
 import json
-import resource
 import sys
 from pathlib import Path
 from typing import Any, Dict
+
+try:
+    import resource
+except ImportError:
+    resource = None
 
 
 def _write(path: Path, result: Dict[str, Any]) -> None:
@@ -26,6 +30,8 @@ def _write(path: Path, result: Dict[str, Any]) -> None:
 
 
 def _limit_resources(cpu_seconds: int) -> None:
+    if resource is None:
+        return
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds + 10))
     resource.setrlimit(resource.RLIMIT_FSIZE, (512 * 2**20, 512 * 2**20))
@@ -61,9 +67,21 @@ def _time_candidate(torch, task, candidate, config) -> Dict[str, Any]:
     )
     # Minimum DRAM traffic: read the input once, write the output once.
     bytes_moved = (x.numel() + out.numel()) * x.element_size()
+    cand_bw = bytes_moved / (decision["median_candidate_ms"] * 1e6)
+    ref_bw = bytes_moved / (decision["median_reference_ms"] * 1e6)
     decision["bytes_moved"] = bytes_moved
-    decision["candidate_bandwidth_gbps"] = bytes_moved / (decision["median_candidate_ms"] * 1e6)
-    decision["reference_bandwidth_gbps"] = bytes_moved / (decision["median_reference_ms"] * 1e6)
+    decision["candidate_bandwidth_gbps"] = cand_bw
+    decision["reference_bandwidth_gbps"] = ref_bw
+
+    from engine.benchmark import peak_memory_bandwidth_gbps
+
+    peak_bw = peak_memory_bandwidth_gbps("cuda:0")
+    decision["peak_bandwidth_gbps"] = peak_bw
+    if peak_bw and cand_bw > peak_bw * 1.20 and decision["status"] == "accepted":
+        decision["status"] = "rejected"
+        decision["reason"] = "above_roofline_bandwidth"
+        decision["speedup"] = None
+
     decision["elapsed_seconds"] = sampled["elapsed_seconds"]
     decision["window_complete"] = sampled["window_complete"]
     decision["timing_shape"] = list(x.shape)

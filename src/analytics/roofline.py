@@ -13,8 +13,10 @@ from data.tasks import get_task
 # Published peak memory bandwidth in GB/s. Real cards reach somewhat less,
 # so pass a measured value to the functions below when you have one.
 PEAK_BANDWIDTH_GBPS: Dict[str, float] = {
+    "RTX 4050": 192.0,
     "T4": 320.0,
     "L4": 300.0,
+    "RTX 3090": 936.2,
     "V100": 900.0,
     "A100-40GB": 1555.0,
     "A100-80GB": 2039.0,

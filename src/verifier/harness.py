@@ -88,6 +88,8 @@ class KernelVerifier:
                 task_id=request.task_id,
                 compiled=False,
                 correct=False,
+                status="static_failed",
+                stable=False,
                 error_message=reason,
                 failure_stage="static_check",
             )
@@ -104,15 +106,16 @@ class KernelVerifier:
             result, info = self._launch(request, job_dir, "full", request.device_id, timeout)
 
         timing = result.get("timing")
-        if (
-            timing
-            and timing["status"] == VERIFICATION_REQUIRED
-            and cfg.verification_device_id is not None
-            and cfg.verification_device_id != request.device_id
-        ):
-            second, _ = self._launch(
-                request, job_dir, "timing", cfg.verification_device_id, timeout
+        if timing and timing["status"] == VERIFICATION_REQUIRED:
+            confirm_device = (
+                cfg.verification_device_id
+                if (
+                    cfg.verification_device_id is not None
+                    and cfg.verification_device_id != request.device_id
+                )
+                else request.device_id
             )
+            second, _ = self._launch(request, job_dir, "timing", confirm_device, timeout)
             if second.get("timing"):
                 result["timing"] = confirm_on_second_gpu(
                     timing, second["timing"], cfg.cross_gpu_tolerance
@@ -167,7 +170,10 @@ class KernelVerifier:
             log, _ = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
-            os.killpg(proc.pid, signal.SIGKILL)
+            if hasattr(os, "killpg"):
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
             log, _ = proc.communicate()
 
         result_path = job_dir / f"result_{mode}.json"
@@ -223,6 +229,39 @@ class KernelVerifier:
         if failure in ("timeout", "worker_crash", "runtime_error", "memcheck") and not error:
             error = info["log_tail"][-1000:]
 
+        stable = bool(
+            correct
+            and failure is None
+            and timing.get("status") == ACCEPTED
+            and timing.get("speedup") is not None
+        )
+        failure_status_map = {
+            "static_check": "static_failed",
+            "compile": "compile_error",
+            "incorrect": "incorrect",
+            "memcheck": "sanitizer_error",
+            "inter_block_variance_exceeded": "unstable",
+            "speedup_above_suspicious_threshold": "implausible_speedup",
+            "above_roofline_bandwidth": "fake_gain",
+            "cross_gpu_mismatch": "cross_gpu_mismatch",
+            "timeout": "timeout",
+            "runtime_error": "runtime_error",
+            "worker_crash": "runtime_error",
+        }
+        mapped_status = (
+            "ok"
+            if stable
+            else failure_status_map.get(failure or "", failure or "unknown")
+        )
+        cand_bw = timing.get("candidate_bandwidth_gbps")
+        ref_bw = timing.get("reference_bandwidth_gbps")
+        if cand_bw is not None and ref_bw:
+            bw_delta = (float(cand_bw) - float(ref_bw)) / float(ref_bw)
+        elif timing.get("speedup"):
+            bw_delta = float(timing["speedup"]) - 1.0
+        else:
+            bw_delta = 0.0
+
         return KernelEvalResponse(
             task_id=request.task_id,
             compiled=compiled,
@@ -230,10 +269,18 @@ class KernelVerifier:
             execution_time_ms=timing.get("median_candidate_ms"),
             baseline_time_ms=timing.get("median_reference_ms"),
             speedup=timing.get("speedup"),
-            memory_bandwidth_gbps=timing.get("candidate_bandwidth_gbps"),
-            baseline_bandwidth_gbps=timing.get("reference_bandwidth_gbps"),
+            memory_bandwidth_gbps=cand_bw,
+            baseline_bandwidth_gbps=ref_bw,
+            bandwidth_delta=bw_delta,
             compiler_output=result.get("compiler_output", ""),
             error_message=error,
+            status=mapped_status,
+            stable=stable,
+            variance=float(timing.get("variance") or 0.0),
+            candidate_code_hash=str(
+                result.get("candidate_code_hash") or result.get("source_sha256") or ""
+            ),
+            device_name=str(result.get("device_name") or timing.get("gpu_name") or ""),
             failure_stage=failure,
             extra=extra,
         )

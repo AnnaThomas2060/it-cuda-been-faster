@@ -1,0 +1,75 @@
+# Contrastive RL configuration tuned for 2x RTX 3090 (24 GiB).
+# Matches rtx3090_multiturn_grpo.yaml with contrastive archive pairwise anchors.
+mode: contrastive
+
+base_model_name: "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+dev_model_name: "Qwen/Qwen2.5-Coder-7B-Instruct"
+use_dev_model: false
+
+lora_r: 8
+lora_alpha: 16
+lora_dropout: 0.05
+target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+
+learning_rate: 1.0e-6
+weight_decay: 0.01
+beta: 0.0
+group_size: 4
+num_generations: 4
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 4
+max_steps: 24
+training_passes: 2
+tasks_per_step: 3
+rollout_batch_size: 1
+max_prompt_length: 3072
+max_completion_length: 1024
+max_teacher_examples: 2
+temperature: 0.8
+top_p: 0.95
+seed: 635
+data_seed: 635
+save_steps: 6
+save_total_limit: 2
+logging_steps: 1
+
+num_turns: 2
+eval_turns: 4
+gamma: 0.4
+early_stop_speedup: 2.0
+
+reward_mode: shaped
+correctness_bonus: 0.30
+bandwidth_weight: 0.10
+dr_grpo_l_norm: 4096
+epsilon: 0.20
+epsilon_high: 0.28
+max_grad_norm: 0.05
+
+benchmark_warmup_iters: 10
+benchmark_num_blocks: 7
+benchmark_runs_per_block: 10
+variance_threshold: 0.005
+cross_gpu_validation: true
+cross_gpu_ratio_threshold: 3.0
+cross_gpu_tolerance: 0.10
+use_verifier_worker: true
+verifier_workers: 1
+device: "cuda:0"
+verifier_device: "cuda:1"
+
+archive_path: "./outputs/contrastive_archive.jsonl"
+enable_cross_trajectory_anchors: true
+archive_capacity_per_task: 16
+min_speedup_margin_delta: 0.25
+pairwise_margin_weight: 0.20
+pairwise_beta: 0.10
+contrastive_pairs_per_step: 4
+telemetry_path: "./logs/trajectory_telemetry.jsonl"
+output_dir_arm_a: "./outputs/arm_a_contrastive"
+output_dir_arm_b: "./outputs/arm_b_reference_only"
+eval_output_dir: "./outputs/eval_results"

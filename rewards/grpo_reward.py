@@ -3,24 +3,18 @@ import logging
 import os
 import uuid
 from collections import defaultdict
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from data.tasks import TASKS
+from engine.utils import now_iso
 from src.contracts import KernelEvalRequest, KernelEvalResponse, TelemetryRecord
-
-# Reward computation for Group Relative Policy Optimization training.
-# Every completion is sent to the process-isolated verifier (src/verifier),
-# which runs static checks, compilation, the correctness suite and paired
-# timing. The reward is the denoised speedup, or 0.0 on any failure.
+from src.rewards.reward_engine import RewardEngine
 
 logger = logging.getLogger(__name__)
 
-# Global registry tracking failure taxonomy and zero reward group occurrences.
 ERROR_TAXONOMY: Dict[str, int] = defaultdict(int)
 GROUP_STATS: Dict[str, int] = defaultdict(int)
 
-# Verifier failure_stage -> taxonomy key (kept stable for existing logs).
 FAILURE_TAXONOMY = {
     "static_check": "static_check_failed",
     "compile": "compilation_failed",
@@ -57,14 +51,6 @@ def get_verifier() -> Any:
     return _VERIFIER
 
 
-def infer_task_id_from_prompt(prompt: str) -> str:
-    prompt_lower = prompt.lower()
-    for task_id, data in TASKS.items():
-        if data["name"].lower() in prompt_lower or task_id in prompt_lower:
-            return task_id
-    return "swish"
-
-
 def _emit_telemetry(response: KernelEvalResponse, reward: float) -> None:
     if not _TELEMETRY_PATH:
         return
@@ -77,7 +63,7 @@ def _emit_telemetry(response: KernelEvalResponse, reward: float) -> None:
         compiled=response.compiled,
         correct=response.correct,
         memory_bandwidth_gbps=response.memory_bandwidth_gbps,
-        timestamp=datetime.now(timezone.utc).isoformat(),
+        timestamp=now_iso(),
         extra={
             "failure_stage": response.failure_stage,
             "execution_time_ms": response.execution_time_ms,
@@ -87,15 +73,56 @@ def _emit_telemetry(response: KernelEvalResponse, reward: float) -> None:
         },
     )
     os.makedirs(os.path.dirname(_TELEMETRY_PATH) or ".", exist_ok=True)
-    with open(_TELEMETRY_PATH, "a") as handle:
-        handle.write(json.dumps(record.model_dump()) + "\n")
+    payload = record.model_dump() if hasattr(record, "model_dump") else record.dict()
+    with open(_TELEMETRY_PATH, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload) + "\n")
+
+
+def infer_task_id_from_prompt(prompt: str) -> str:
+    prompt_lower = prompt.lower()
+    for task_id, data in TASKS.items():
+        if data["name"].lower() in prompt_lower or task_id in prompt_lower:
+            return task_id
+    return "swish"
+
+
+def _taxonomy_for_status(status: str) -> str:
+    if status == "static_failed":
+        return "static_check_failed"
+    if status in {"compile_error", "runtime_unavailable"}:
+        return "compilation_failed"
+    if status in {"incorrect", "cache_or_incorrect"}:
+        return "numerical_divergence"
+    if status == "runtime_error":
+        return "runtime_crash"
+    if status in {
+        "unstable",
+        "timeout",
+        "fake_gain",
+        "implausible_speedup",
+        "measurement_too_small",
+    }:
+        return "timing_unstable"
+    if status == "sanitizer_error":
+        return "memory_safety"
+    if status == "ok":
+        return "success"
+    return "unknown"
 
 
 def evaluate_single_completion(
-    completion: str, task_id: str, device_id: Optional[int] = None
+    completion: str,
+    task_id: str,
+    config: Any = None,
+    dispatcher: Any = None,
+    device_id: Optional[int] = None,
 ) -> float:
-    # On a 2-GPU box, train on GPU 0 and set VERIFIER_DEVICE=1 so timing is
-    # not disturbed by the policy's own kernels.
+    if dispatcher is not None and config is not None:
+        engine = RewardEngine(config, dispatcher)
+        result = engine.evaluate_code(completion, task_id)
+        ERROR_TAXONOMY[_taxonomy_for_status(result.status)] += 1
+        return float(result.reward)
+
     if device_id is None:
         device_id = int(os.environ.get("VERIFIER_DEVICE", "0"))
     response = get_verifier().evaluate(
@@ -106,83 +133,112 @@ def evaluate_single_completion(
         ERROR_TAXONOMY["success"] += 1
     else:
         reward = 0.0
-        ERROR_TAXONOMY[FAILURE_TAXONOMY.get(response.failure_stage, "unknown_failure")] += 1
-        logger.debug("task=%s failure=%s: %s", task_id, response.failure_stage,
-                     (response.error_message or "")[:200])
+        ERROR_TAXONOMY[FAILURE_TAXONOMY.get(response.failure_stage or "", "unknown_failure")] += 1
     _emit_telemetry(response, reward)
     return reward
+
+
+def _flatten_completions(completions: List[Any]) -> List[str]:
+    flat: List[str] = []
+    for completion in completions:
+        if isinstance(completion, list) and completion and isinstance(completion[0], dict):
+            flat.append(completion[0].get("content", ""))
+        elif isinstance(completion, dict):
+            flat.append(completion.get("content", ""))
+        else:
+            flat.append(str(completion))
+    return flat
+
+
+def _resolve_task_ids(
+    prompts: List[str],
+    num_samples: int,
+    task_id_arg: Any,
+    fallback_prompt: str,
+) -> List[str]:
+    task_ids: Optional[List[str]] = None
+    if isinstance(task_id_arg, list):
+        if len(task_id_arg) == num_samples:
+            task_ids = [str(value) for value in task_id_arg]
+        elif task_id_arg and num_samples % len(task_id_arg) == 0:
+            repeat = num_samples // len(task_id_arg)
+            task_ids = [str(value) for value in task_id_arg for _ in range(repeat)]
+    elif isinstance(task_id_arg, str):
+        task_ids = [task_id_arg] * num_samples
+
+    if task_ids is None:
+        task_ids = []
+        for prompt in prompts:
+            inferred = infer_task_id_from_prompt(prompt or fallback_prompt)
+            task_ids.append(inferred)
+    return task_ids
 
 
 def compute_grpo_rewards(
     prompts: Optional[List[str]] = None,
     completions: Optional[List[Any]] = None,
-    **kwargs: Any
+    **kwargs: Any,
 ) -> List[float]:
-    # Handle variations in TRL completion argument formats
+    config = kwargs.pop("config", None)
+    dispatcher = kwargs.pop("dispatcher", None)
     if completions is None:
         completions = kwargs.get("candidate_completions", [])
 
-    flat_completions: List[str] = []
-    for comp in completions:
-        if isinstance(comp, list) and len(comp) > 0 and isinstance(comp[0], dict):
-            flat_completions.append(comp[0].get("content", ""))
-        elif isinstance(comp, dict):
-            flat_completions.append(comp.get("content", ""))
-        else:
-            flat_completions.append(str(comp))
-
+    flat_completions = _flatten_completions(completions)
     num_samples = len(flat_completions)
 
-    # Replicate prompts if TRL provides 1 prompt per batch with G completions
     if prompts is not None and len(prompts) > 0:
         if len(prompts) != num_samples and num_samples % len(prompts) == 0:
             repeat = num_samples // len(prompts)
-            prompts = [p for p in prompts for _ in range(repeat)]
+            prompts = [prompt for prompt in prompts for _ in range(repeat)]
         elif len(prompts) != num_samples:
-            default_prompt = kwargs.get("prompt", "")
-            prompts = [default_prompt] * num_samples
+            prompts = [kwargs.get("prompt", "")] * num_samples
     else:
-        fallback_prompt = kwargs.get("prompt", "")
-        prompts = [fallback_prompt] * num_samples
+        prompts = [kwargs.get("prompt", "")] * num_samples
 
-    # Check if task_id was passed directly via dataset column
-    task_ids: Optional[List[str]] = None
-    if "task_id" in kwargs:
-        tid_arg = kwargs["task_id"]
-        if isinstance(tid_arg, list):
-            if len(tid_arg) == num_samples:
-                task_ids = tid_arg
-            elif len(tid_arg) > 0 and num_samples % len(tid_arg) == 0:
-                repeat = num_samples // len(tid_arg)
-                task_ids = [t for t in tid_arg for _ in range(repeat)]
-        elif isinstance(tid_arg, str):
-            task_ids = [tid_arg] * num_samples
+    task_ids = _resolve_task_ids(
+        prompts, num_samples, kwargs.get("task_id"), kwargs.get("prompt", "")
+    )
 
     rewards: List[float] = []
-    for idx, (prompt, comp) in enumerate(zip(prompts, flat_completions)):
-        if task_ids and idx < len(task_ids):
-            task_id = task_ids[idx]
-        else:
-            task_id = infer_task_id_from_prompt(prompt)
-        reward = evaluate_single_completion(comp, task_id)
+    for prompt, completion, task_id in zip(prompts, flat_completions, task_ids):
+        reward = evaluate_single_completion(
+            completion,
+            task_id,
+            config=config,
+            dispatcher=dispatcher,
+        )
         rewards.append(reward)
 
-    # Detect and record zero reward collapse within groups of size G=2
-    if len(rewards) >= 2:
-        for i in range(0, len(rewards), 2):
-            group = rewards[i:i + 2]
-            if len(group) == 2:
+    group_size = int(kwargs.get("group_size", 2))
+    if group_size > 1:
+        for index in range(0, len(rewards), group_size):
+            group = rewards[index : index + group_size]
+            if len(group) == group_size:
                 GROUP_STATS["total_groups"] += 1
-                if all(r == 0.0 for r in group):
+                if all(reward == 0.0 for reward in group):
                     GROUP_STATS["zero_reward_groups"] += 1
 
     return rewards
+
+
+def make_reward_function(config: Any, dispatcher: Any) -> Callable[..., List[float]]:
+    def kernel_reward(prompts=None, completions=None, **kwargs):
+        kwargs["config"] = config
+        kwargs["dispatcher"] = dispatcher
+        kwargs.setdefault("group_size", config.effective_group_size())
+        return compute_grpo_rewards(prompts=prompts, completions=completions, **kwargs)
+
+    kernel_reward.__name__ = "kernel_reward"
+    return kernel_reward
+
 
 def get_taxonomy_summary() -> Dict[str, Any]:
     return {
         "error_taxonomy": dict(ERROR_TAXONOMY),
         "group_stats": dict(GROUP_STATS),
     }
+
 
 def reset_taxonomy_stats() -> None:
     ERROR_TAXONOMY.clear()

@@ -34,8 +34,8 @@ from rewards.grpo_reward import (  # noqa: E402
 # Checks task registration, teacher example retrieval, prompt construction, and static code filters.
 # Runs in lightweight test environments without requiring an active CUDA runtime.
 
-class TestPipelineComponents(unittest.TestCase):
 
+class TestPipelineComponents(unittest.TestCase):
     def test_task_registry(self):
         training_tasks = list_task_ids(training_only=True)
         self.assertIn("swish", training_tasks)
@@ -60,9 +60,9 @@ class TestPipelineComponents(unittest.TestCase):
         self.assertEqual(len(swish_teachers), 2)
         self.assertGreater(swish_teachers[1]["speedup"], swish_teachers[0]["speedup"])
 
-        # RMSNorm single teacher fallback check
+        # All three training tasks should have at least 2 teachers for contrastive pairing
         rmsnorm_teachers = get_teacher_examples("channel_rmsnorm")
-        self.assertEqual(len(rmsnorm_teachers), 1)
+        self.assertEqual(len(rmsnorm_teachers), 2)
 
         empty_teachers = get_teacher_examples("nonexistent_task")
         self.assertEqual(empty_teachers, [])
@@ -250,6 +250,7 @@ class TestPipelineComponents(unittest.TestCase):
                 param.data = param.data.to(target_dtype)
 
         self.assertEqual(linear.weight.dtype, torch.float32)
+
 
 if __name__ == "__main__":
     unittest.main()

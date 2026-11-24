@@ -227,11 +227,20 @@ def _write_summary_report(
     eval_dir: Path,
     timings: Dict[str, float],
     profile: str,
+    mock: bool = False,
 ) -> Path:
     report_path = eval_dir / "pipeline_report.md"
     lines = [
         "# End-to-End Pipeline Report",
         "",
+    ]
+    if mock:
+        lines += [
+            "> **MOCK RUN: every kernel was scored by MockDispatcher (fixed 1.05x).",
+            "> No numbers in this report are measurements. Do not report them.**",
+            "",
+        ]
+    lines += [
         f"- Profile: `{profile}`",
         f"- Output root: `{output_root}`",
         "",
@@ -427,12 +436,23 @@ def main() -> int:
     parser.add_argument("--skip_completed", action="store_true")
     parser.add_argument("--output_root", default=None)
     parser.add_argument("--seed", type=int, default=635)
+    parser.add_argument(
+        "--allow_mock",
+        action="store_true",
+        help="Allow MockDispatcher when no CUDA toolchain exists (smoke tests only).",
+    )
     args = parser.parse_args()
 
     default_root = "./outputs/local_4050" if args.profile == "local_4050" else "./outputs"
     output_root = Path(args.output_root or default_root)
     output_root.mkdir(parents=True, exist_ok=True)
     settings = _profile_settings(args.profile, output_root)
+    if settings["dispatcher"] == "mock" and not args.allow_mock:
+        parser.error(
+            "No native CUDA toolchain (nvcc/ninja/host compiler) found, so every kernel "
+            "would be scored by MockDispatcher (fixed 1.05x). Install the toolchain, or "
+            "pass --allow_mock for a smoke test whose numbers must not be reported."
+        )
 
     env = dict(os.environ)
     env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -736,7 +756,10 @@ def main() -> int:
             ]
             timings["analytics"] = _run_step("analytics", cmd, env)
 
-        report_path = _write_summary_report(output_root, eval_dir, timings, args.profile)
+        report_path = _write_summary_report(
+            output_root, eval_dir, timings, args.profile,
+            mock=settings["dispatcher"] == "mock",
+        )
         print(f"\nPipeline report written to {report_path}")
 
     return 0

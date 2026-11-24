@@ -68,6 +68,15 @@ class TestPipelineComponents(unittest.TestCase):
         self.assertEqual(empty_teachers, [])
 
     def test_prompt_builder(self):
+        # Pin the unmeasured (placeholder) path; real measurements on disk
+        # would otherwise change the scores shown in the prompt.
+        from unittest import mock
+
+        missing = os.path.join(WORKSPACE_ROOT, "tests", "no_such_measurements.json")
+        with mock.patch.dict(os.environ, {"TEACHER_MEASUREMENTS_PATH": missing}):
+            self._check_prompt_builder()
+
+    def _check_prompt_builder(self):
         # Reference-only mode
         p_ref = build_prompt("swish", mode="reference_only")
         self.assertIn("torch::Tensor run_cuda", p_ref)

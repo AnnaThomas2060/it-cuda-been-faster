@@ -393,8 +393,20 @@ def test_grpo_and_dpo_losses() -> None:
         l_norm=6.0,
     )
     capped_ratio = 1.28
-    expected = (-capped_ratio * 3 + 1.0 * 3) / 6.0
+    # Dr. GRPO divides by batch_size * l_norm (2 rows * 6.0).
+    expected = (-capped_ratio * 3 + 1.0 * 3) / (2 * 6.0)
     assert float(loss_with_ratio) == pytest.approx(expected, abs=1e-6)
+
+    # Loss scale must not grow with batch size: doubling the batch with
+    # identical rows leaves the loss unchanged.
+    doubled = grpo_loss(
+        shifted.repeat(2, 1),
+        old_logprobs.repeat(2, 1),
+        advantages.repeat(2),
+        mask.repeat(2, 1),
+        l_norm=6.0,
+    )
+    assert float(doubled) == pytest.approx(float(loss_with_ratio), abs=1e-6)
 
     better = dpo_loss(
         torch.tensor(-1.0),
@@ -948,6 +960,10 @@ def test_repository_text_has_no_dash_or_emoji_violations() -> None:
         if not path.is_file() or path.suffix not in suffixes:
             continue
         if ".git" in path.parts or "__pycache__" in path.parts:
+            continue
+        # Third-party code in virtualenvs is not ours to lint.
+        if any(part.startswith((".venv", "venv")) or part == "site-packages"
+               for part in path.relative_to(REPO_ROOT).parts):
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
         for character, name in forbidden.items():

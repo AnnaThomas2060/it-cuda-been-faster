@@ -72,7 +72,9 @@ def grpo_loss(
                 f"{l_norm!r}. Set config.dr_grpo_l_norm to a positive value "
                 "instead of relying on sequence-length normalization."
             )
-        denominator = float(l_norm)
+        # Dr. GRPO normalizes by batch_size * L_max (a constant), so the loss
+        # scale, and the effective step size, does not depend on batch size.
+        denominator = weighted.shape[0] * float(l_norm)
         return weighted.sum() / denominator
     active = mask.sum().clamp(min=1.0)
     return weighted.sum() / active

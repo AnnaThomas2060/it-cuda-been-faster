@@ -105,6 +105,8 @@ def _taxonomy_for_status(status: str) -> str:
         return "timing_unstable"
     if status == "sanitizer_error":
         return "memory_safety"
+    if status == "copied_example":
+        return "copied_example"
     if status == "ok":
         return "success"
     return "unknown"

@@ -107,6 +107,9 @@ class ExperimentConfig:
     correctness_bonus: float = 0.30
     bandwidth_weight: float = 0.10
     reward_clip: float = 2.0
+    # Candidates at least this token-similar to a code example shown in their
+    # prompt get reward 0 (status "copied_example"). None disables the gate.
+    novelty_threshold: Optional[float] = 0.9
     use_bandwidth: bool = True
     fake_gain_ratio: float = 1.20
     max_plausible_speedup: float = 10.0
@@ -209,6 +212,8 @@ class ExperimentConfig:
             raise ValueError("dr_grpo_l_norm must be > 0 for the dr_grpo loss")
         if self.reward_clip <= 0:
             raise ValueError("reward_clip must be positive")
+        if self.novelty_threshold is not None and not 0.0 < self.novelty_threshold <= 1.0:
+            raise ValueError("novelty_threshold must be in (0, 1] or None")
         if self.verification_device is not None and self.verification_device in (
             self.device,
             self.verifier_device,

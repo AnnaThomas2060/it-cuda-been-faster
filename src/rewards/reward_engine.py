@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from engine.utils import JsonlWriter, now_iso, sha256_text
 from src.contracts import KernelEvalRequest, KernelEvalResponse, TelemetryRecord
 from src.rewards.archive import ContrastiveArchive
+from src.rewards.novelty import max_example_similarity
 
 
 @dataclass
@@ -99,6 +100,14 @@ class RewardEngine:
         trajectory_id: str = "",
         prompt_text: Optional[str] = None,
     ) -> RewardResult:
+        copied = self._copied_example(code, task_id, prompt_text)
+        if copied is not None:
+            result = copied
+            self._write_telemetry(
+                result, turn_index, prompt_mode, trajectory_id=trajectory_id or uuid.uuid4().hex
+            )
+            return result
+
         request = KernelEvalRequest(
             task_id=task_id,
             code=code,
@@ -161,6 +170,45 @@ class RewardEngine:
             trajectory_id=trajectory_id or uuid.uuid4().hex,
         )
         return result
+
+    def _copied_example(
+        self, code: str, task_id: str, prompt_text: Optional[str]
+    ) -> Optional[RewardResult]:
+        """RewardResult with reward 0 if `code` copies a prompt example, else None.
+
+        Runs before verification: a copy needs no compile, and it never enters
+        the archive as a fresh anchor.
+        """
+        threshold = getattr(self.config, "novelty_threshold", None)
+        if threshold is None or not prompt_text:
+            return None
+        similarity = max_example_similarity(code, prompt_text)
+        if similarity < threshold:
+            return None
+        message = (
+            f"Copied a code example from the prompt (token similarity {similarity:.2f} >= "
+            f"{threshold:.2f}). Write your own implementation; examples are for reference."
+        )
+        response = KernelEvalResponse(
+            task_id=task_id,
+            compiled=False,
+            correct=False,
+            status="copied_example",
+            stable=False,
+            error_message=message,
+            failure_stage="copied_example",
+            extra={"example_similarity": similarity},
+        )
+        return RewardResult(
+            task_id=task_id,
+            code=code,
+            reward=0.0,
+            status="copied_example",
+            response=response,
+            speedup=0.0,
+            taxonomy="copied_example",
+            metadata={"example_similarity": similarity},
+        )
 
     def _write_telemetry(
         self,

@@ -53,6 +53,12 @@ class TrainerMetrics:
             "single_example_groups": self.single_example_groups,
             "reference_fallback_groups": self.reference_fallback_groups,
             "status_counts": self.status_counts,
+            # Fraction of turns rejected for copying a prompt example.
+            "copy_rate": (
+                self.status_counts.get("copied_example", 0) / sum(self.status_counts.values())
+                if self.status_counts
+                else 0.0
+            ),
             "timestamp": now_iso(),
         }
 

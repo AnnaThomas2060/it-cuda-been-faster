@@ -89,6 +89,7 @@ def _single_turn_attempt(
         task_id,
         prompt_mode=prompt_mode,
         raw_completion=completion_text,
+        prompt_text=prompt_text,  # enables the copied-example gate
     )
     response = result.response
     return {
@@ -227,6 +228,13 @@ def _summarize_records(records: List[Dict[str, Any]], task_keys: List[str]) -> D
                 }
             )
 
+    # Single-turn records have one status; multi-turn ones list every turn.
+    turn_statuses = [
+        turn.get("status")
+        for record in records
+        for turn in (record.get("turn_records") or [record])
+    ]
+    copied_attempts = turn_statuses.count("copied_example")
     compile_count = sum(1 for record in best_records if record.get("compiled"))
     correct_count = sum(1 for record in best_records if record["numerically_correct"])
     unresolved_timing_count = sum(
@@ -252,6 +260,8 @@ def _summarize_records(records: List[Dict[str, Any]], task_keys: List[str]) -> D
         "correct_count": correct_count,
         "correctness_rate": round(correct_count / total_tasks, 4) if total_tasks else 0.0,
         "unresolved_timing_count": unresolved_timing_count,
+        # Attempts rejected for copying a prompt example (Arm A only can copy).
+        "copy_rate": round(copied_attempts / len(turn_statuses), 4) if turn_statuses else 0.0,
         "attempt_correctness_rate": round(attempt_correct / total_attempts, 4)
         if total_attempts
         else 0.0,

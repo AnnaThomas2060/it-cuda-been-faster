@@ -11,7 +11,7 @@ from engine.compiler import extract_code_block
 from engine.prompt_builder import build_turn_messages, format_chat_prompt
 from engine.utils import environment_metadata, set_seed
 from models.loader import load_model_and_tokenizer
-from src.pipeline.env_dispatcher import build_dispatcher
+from src.pipeline.env_dispatcher import VerifierHarnessDispatcher, build_dispatcher
 from src.pipeline.rollout_manager import RolloutManager
 from src.rewards.reward_engine import RewardEngine
 
@@ -294,7 +294,8 @@ def evaluate_checkpoint(
     cfg.validate()
     mode = mode or cfg.mode
     if dispatcher is None:
-        dispatcher = build_dispatcher(cfg, kind="in_process")
+        # Reported numbers use the strict protocol (memcheck, >3x confirmation).
+        dispatcher = VerifierHarnessDispatcher(cfg, profile="evaluation")
     reward_engine = RewardEngine(cfg, dispatcher)
     model.eval()
     set_seed(cfg.seed)
@@ -404,7 +405,13 @@ def main() -> None:
         is_trainable=False,
         adapter_path=adapter_path,
     )
-    dispatcher = build_dispatcher(config, kind=args.dispatcher)
+    # "auto" means the isolated verifier here, even when the training profile
+    # turns the worker off: evaluation results must not skip memcheck.
+    kind = "verifier" if args.dispatcher == "auto" else args.dispatcher
+    if kind in ("in_process", "mock"):
+        print(f"WARNING: --dispatcher {kind}: results are NOT from the strict verifier "
+              "and must not be reported.")
+    dispatcher = build_dispatcher(config, kind=kind)
     task_keys = args.tasks.split(",") if args.tasks else list(config.eval_tasks)
     try:
         summary = evaluate_checkpoint(

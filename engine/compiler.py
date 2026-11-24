@@ -31,6 +31,27 @@ ALLOWED_TORCH_SYMBOLS = {
     "TensorOptions",
     "from_blob",
     "cuda",
+    # Allocation, dtype, layout and device helpers: host-side setup, not
+    # compute, so a kernel using them still does its own math.
+    "zeros_like",
+    "ones_like",
+    "empty_strided",
+    "dtype",
+    "device",
+    "layout",
+    "kHalf",
+    "kDouble",
+    "kFloat64",
+    "kInt64",
+    "kInt8",
+    "kUInt8",
+    "kInt16",
+    "kBool",
+    "kStrided",
+    "IntArrayRef",
+    "MemoryFormat",
+    "DeviceGuard",
+    "OptionalDeviceGuard",
 }
 
 FORBIDDEN_MEMBER_METHODS = {
@@ -186,6 +207,15 @@ def compile_kernel_ex(
     """
     flags = ["-O3", "--use_fast_math"] + list(extra_cuda_cflags or [])
 
+    # Some system torch builds (e.g. Debian/Ubuntu packages) lack pybind11
+    # headers on their include path; the pip pybind11 package provides them.
+    try:
+        import pybind11
+
+        include_paths = [pybind11.get_include()]
+    except ImportError:
+        include_paths = []
+
     try:
         module = load_inline(
             name=module_name,
@@ -193,6 +223,7 @@ def compile_kernel_ex(
             cuda_sources=code,
             functions=None,
             extra_cuda_cflags=flags,
+            extra_include_paths=include_paths,
             build_directory=build_directory,
             verbose=verbose,
         )
@@ -209,13 +240,20 @@ def compile_kernel_ex(
         return CompileResult(
             module=None,
             status="compile_error",
-            message=f"Compilation failed: {str(exc)[:500]}",
+            message=f"Compilation failed: {summarize_build_error(str(exc))}",
             code=code,
             code_hash=code_hash,
             module_name=module_name,
             build_time_sec=time.perf_counter() - started,
             log=str(exc)[:4000],
         )
+
+
+def summarize_build_error(log: str, limit: int = 1500) -> str:
+    """Keep the compiler's error lines, not the leading command line."""
+    errors = [line.strip() for line in log.splitlines() if "error" in line.lower()]
+    text = "\n".join(dict.fromkeys(errors)) or log  # dedupe, keep order
+    return text[:limit]
 
 
 def compile_kernel(

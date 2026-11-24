@@ -37,7 +37,8 @@ def _limit_resources(cpu_seconds: int) -> None:
     resource.setrlimit(resource.RLIMIT_FSIZE, (512 * 2**20, 512 * 2**20))
 
 
-def _time_candidate(torch, task, candidate, config) -> Dict[str, Any]:
+def _time_candidate(torch, task, candidate, config, task_id: str) -> Dict[str, Any]:
+    from src.verifier.config import suspicious_threshold
     from src.verifier.timing import collect_timing_pairs, denoise_pairs, measure_callable
 
     reference = task["fn"]
@@ -63,7 +64,7 @@ def _time_candidate(torch, task, candidate, config) -> Dict[str, Any]:
         sampled["pairs"],
         block_count=config.block_count,
         variance_limit=config.variance_limit,
-        suspicious_speedup=config.suspicious_speedup,
+        suspicious_speedup=suspicious_threshold(task_id, config.suspicious_speedup),
     )
     # Minimum DRAM traffic: read the input once, write the output once.
     bytes_moved = (x.numel() + out.numel()) * x.element_size()
@@ -158,7 +159,7 @@ def run(job_dir: Path) -> Dict[str, Any]:
     if mode in ("full", "timing"):
         result["stage"] = "timing"
         _write(out_path, result)
-        result["timing"] = _time_candidate(torch, task, candidate, config)
+        result["timing"] = _time_candidate(torch, task, candidate, config, job["task_id"])
 
     result.update(stage="done", status="ok")
     _write(out_path, result)

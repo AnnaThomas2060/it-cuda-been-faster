@@ -1,0 +1,68 @@
+{
+  "average_pooling_2d": [
+    {
+      "device": "NVIDIA GeForce RTX 3090",
+      "name": "block_tiled_avg_pool2d",
+      "speedup": 1.36,
+      "variance": 0.0029875000636474347
+    }
+  ],
+  "channel_rmsnorm": [
+    {
+      "device": "NVIDIA GeForce RTX 3090",
+      "name": "warp_reduced_rmsnorm",
+      "speedup": 4.96,
+      "variance": 0.0023798673527083082
+    },
+    {
+      "device": "NVIDIA GeForce RTX 3090",
+      "name": "shared_mem_tree_rmsnorm",
+      "speedup": 4.99,
+      "variance": 0.00010945882934897365
+    }
+  ],
+  "column_max": [
+    {
+      "device": "NVIDIA GeForce RTX 3090",
+      "name": "linear_column_scan",
+      "speedup": 0.7,
+      "variance": 5.8284834540459466e-08
+    },
+    {
+      "device": "NVIDIA GeForce RTX 3090",
+      "name": "unrolled_column_max",
+      "speedup": 0.28,
+      "variance": 9.160032413365461e-08
+    }
+  ],
+  "cumsum": [
+    {
+      "device": "NVIDIA GeForce RTX 3090",
+      "name": "warp_chunk_scan",
+      "speedup": 0.67,
+      "variance": 6.043846857739839e-07
+    }
+  ],
+  "softmax": [
+    {
+      "device": "NVIDIA GeForce RTX 3090",
+      "name": "block_reduced_softmax",
+      "speedup": 1.02,
+      "variance": 3.674199595175309e-07
+    }
+  ],
+  "swish": [
+    {
+      "device": "NVIDIA GeForce RTX 3090",
+      "name": "basic_elementwise_swish",
+      "speedup": 2.42,
+      "variance": 3.8193889115793495e-07
+    },
+    {
+      "device": "NVIDIA GeForce RTX 3090",
+      "name": "vectorized_float4_swish",
+      "speedup": 2.44,
+      "variance": 2.4255449147934954e-06
+    }
+  ]
+}

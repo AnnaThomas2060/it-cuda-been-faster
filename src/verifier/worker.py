@@ -77,7 +77,10 @@ def _time_candidate(torch, task, candidate, config) -> Dict[str, Any]:
 
     peak_bw = peak_memory_bandwidth_gbps("cuda:0")
     decision["peak_bandwidth_gbps"] = peak_bw
-    if peak_bw and cand_bw > peak_bw * 1.20 and decision["status"] == "accepted":
+    # Also check >3x candidates: they are the likeliest fake gains, and
+    # confirm_on_second_gpu would otherwise accept them without this check.
+    checked = ("accepted", "verification_required")
+    if peak_bw and cand_bw > peak_bw * 1.20 and decision["status"] in checked:
         decision["status"] = "rejected"
         decision["reason"] = "above_roofline_bandwidth"
         decision["speedup"] = None
@@ -121,10 +124,12 @@ def run(job_dir: Path) -> Dict[str, Any]:
     if torch.cuda.device_count() != 1:
         raise RuntimeError(f"worker expects one visible GPU, found {torch.cuda.device_count()}")
     torch.cuda.set_device(0)
+    build_dir = job_dir / "build"
+    build_dir.mkdir(exist_ok=True)  # load_inline does not create it
     module, compile_log = compile_kernel(
         code,
         module_name=f"cand_{result['source_sha256'][:16]}",
-        build_directory=str(job_dir / "build"),
+        build_directory=str(build_dir),
     )
     result["compiler_output"] = compile_log
     if module is None:

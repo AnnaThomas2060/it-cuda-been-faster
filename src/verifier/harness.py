@@ -97,7 +97,9 @@ class KernelVerifier:
         if cfg.memcheck:
             result, info = self._launch(request, job_dir, "validate", request.device_id, timeout)
             extra["memcheck_passed"] = info["sanitizer_passed"]
-            if result.get("status") == "ok" and not info["sanitizer_passed"]:
+            ran_kernel = result.get("stage") not in (None, "setup", "static_check", "compile")
+            if ran_kernel and not info["sanitizer_passed"] and not info["timed_out"]:
+                # Memory errors outrank wrong values: they explain them.
                 return self._response(request, result, info, extra, failure="memcheck")
             if result.get("status") == "ok":
                 timing, info = self._launch(request, job_dir, "timing", request.device_id, timeout)
@@ -106,16 +108,18 @@ class KernelVerifier:
             result, info = self._launch(request, job_dir, "full", request.device_id, timeout)
 
         timing = result.get("timing")
-        if timing and timing["status"] == VERIFICATION_REQUIRED:
-            confirm_device = (
-                cfg.verification_device_id
-                if (
-                    cfg.verification_device_id is not None
-                    and cfg.verification_device_id != request.device_id
-                )
-                else request.device_id
+        # A >3x speedup counts only if a *different* GPU reproduces it. Without
+        # one, it stays VERIFICATION_REQUIRED and earns no reward: re-timing on
+        # the same card would reproduce a timing artifact just as well.
+        if (
+            timing
+            and timing["status"] == VERIFICATION_REQUIRED
+            and cfg.verification_device_id is not None
+            and cfg.verification_device_id != request.device_id
+        ):
+            second, _ = self._launch(
+                request, job_dir, "timing", cfg.verification_device_id, timeout
             )
-            second, _ = self._launch(request, job_dir, "timing", confirm_device, timeout)
             if second.get("timing"):
                 result["timing"] = confirm_on_second_gpu(
                     timing, second["timing"], cfg.cross_gpu_tolerance
@@ -153,7 +157,18 @@ class KernelVerifier:
                 filter(None, [str(REPO_ROOT), os.environ.get("PYTHONPATH")])
             ),
             "MAX_JOBS": os.environ.get("MAX_JOBS", "4"),
+            # load_inline shells out to `ninja`; find the venv's copy even when
+            # the venv is not activated.
+            "PATH": os.pathsep.join(
+                [str(Path(self.python).parent), os.environ.get("PATH", "")]
+            ),
         }
+        if mode == "validate":
+            # The caching allocator carves tensors out of large cudaMalloc
+            # blocks, so an out-of-bounds write past a tensor stays inside
+            # memory memcheck considers valid. One cudaMalloc per tensor
+            # makes those writes visible.
+            env["PYTORCH_NO_CUDA_MEMORY_CACHING"] = "1"
         started = time.monotonic()
         proc = subprocess.Popen(
             command,

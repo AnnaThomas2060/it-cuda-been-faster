@@ -217,6 +217,15 @@ def run_multi_turn_training(
         for task_id in config.training_tasks:
             for teacher in get_teacher_examples(task_id):
                 code = str(teacher.get("code", "")).strip()
+                # Only measured teachers are anchors; placeholder speedups
+                # would teach Arm A a wrong ranking.
+                if not teacher.get("verified", False):
+                    logger.warning(
+                        "Skipping unverified teacher %s/%s for the archive "
+                        "(run scripts/verify_teachers.py).",
+                        task_id, teacher.get("name", "teacher"),
+                    )
+                    continue
                 if code:
                     archive.add(
                         task_id=task_id,
@@ -403,6 +412,10 @@ def main() -> None:
     parser.add_argument("--pairwise_margin_weight", type=float, default=None)
     parser.add_argument("--output_dir", default=None)
     args = parser.parse_args()
+    if args.arm == "both" and args.resume_from_checkpoint:
+        # One checkpoint holds one arm's adapter, optimizer and RNG state;
+        # resuming the other arm from it would mix the two conditions.
+        parser.error("--resume_from_checkpoint needs a single --arm (arm_a or arm_b)")
 
     config = ExperimentConfig.from_yaml(args.config) if args.config else ExperimentConfig()
     _apply_cli_overrides(config, args)

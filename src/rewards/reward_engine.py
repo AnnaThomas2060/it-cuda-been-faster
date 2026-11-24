@@ -97,6 +97,7 @@ class RewardEngine:
         run_sanitizer: bool = False,
         raw_completion: Optional[str] = None,
         trajectory_id: str = "",
+        prompt_text: Optional[str] = None,
     ) -> RewardResult:
         request = KernelEvalRequest(
             task_id=task_id,
@@ -138,6 +139,9 @@ class RewardEngine:
                     "variance": response.variance,
                     "bandwidth_delta": response.bandwidth_delta,
                     "raw_completion": (raw_completion or "")[:12000],
+                    # The exact prompt this completion was sampled from, so
+                    # the DPO term scores it in the same context.
+                    "prompt_text": prompt_text or "",
                 },
             )
 

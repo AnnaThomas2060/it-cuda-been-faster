@@ -44,6 +44,9 @@ class RolloutManager:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.padding_side = "left"
+        # Over-long prompts must lose their oldest text, not the trailing
+        # assistant header and newest feedback the model has to respond to.
+        self.tokenizer.truncation_side = "left"
         self.device = _model_device(model)
 
     def _build_prompts(self, trajectories: List[Trajectory], turn_index: int) -> List[str]:
@@ -219,6 +222,7 @@ class RolloutManager:
                     prompt_mode=trajectory.prompt_mode,
                     raw_completion=completion_text,
                     trajectory_id=trajectory.trajectory_id,
+                    prompt_text=prompt_text,
                 )
                 response = reward_result.response
                 reward = reward_result.reward
@@ -305,7 +309,8 @@ class RolloutManager:
                     torch.cuda.empty_cache()
 
         for trajectory in trajectories:
-            trajectory.compute_returns(self.config.gamma)
+            early = trajectory.metadata.get("early_stopped", False)
+            trajectory.compute_returns(self.config.gamma, horizon=num_turns if early else None)
         assign_group_advantages(trajectories)
         return trajectories
 

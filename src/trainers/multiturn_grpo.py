@@ -239,10 +239,14 @@ class MultiTurnGRPOTrainer:
             return raw
         return f"```cpp\n{entry.code}\n```"
 
-    def _encode_pair(
-        self, task_id: str, winner: ArchiveEntry, loser: ArchiveEntry
-    ) -> Optional[Dict[str, Any]]:
-        prompt_text = format_chat_prompt(
+    def _prompt_ids_for(self, task_id: str, entry: ArchiveEntry) -> List[int]:
+        """Token ids of the prompt `entry` was sampled from.
+
+        Rollout entries store their exact prompt. Teacher entries were never
+        sampled from a prompt, so they use the turn-0 prompt. Over-long
+        prompts keep their tail (assistant header and newest feedback).
+        """
+        prompt_text = str(entry.metadata.get("prompt_text", "")) or format_chat_prompt(
             self.tokenizer,
             build_turn_messages(
                 task_id,
@@ -250,12 +254,14 @@ class MultiTurnGRPOTrainer:
                 allow_holdout_teachers=False,
             ),
         )
-        prompt_ids = self.tokenizer(
-            prompt_text,
-            add_special_tokens=False,
-            truncation=True,
-            max_length=self.config.max_prompt_length,
-        )["input_ids"]
+        ids = self.tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
+        return list(ids[-self.config.max_prompt_length:])
+
+    def _encode_pair(
+        self, task_id: str, winner: ArchiveEntry, loser: ArchiveEntry
+    ) -> Optional[Dict[str, Any]]:
+        winner_prompt = self._prompt_ids_for(task_id, winner)
+        loser_prompt = self._prompt_ids_for(task_id, loser)
         winner_ids = self.tokenizer(
             self._code_completion(winner),
             add_special_tokens=False,
@@ -268,11 +274,11 @@ class MultiTurnGRPOTrainer:
             truncation=True,
             max_length=self.config.max_completion_length,
         )["input_ids"]
-        if not prompt_ids or not winner_ids or not loser_ids:
+        if not winner_prompt or not loser_prompt or not winner_ids or not loser_ids:
             return None
-        sequences = [list(prompt_ids) + list(winner_ids), list(prompt_ids) + list(loser_ids)]
+        sequences = [winner_prompt + list(winner_ids), loser_prompt + list(loser_ids)]
         padded = self._pad_sequences(sequences)
-        padded["prompt_lengths"] = [len(prompt_ids), len(prompt_ids)]
+        padded["prompt_lengths"] = [len(winner_prompt), len(loser_prompt)]
         padded["completion_lengths"] = [len(winner_ids), len(loser_ids)]
         return padded
 

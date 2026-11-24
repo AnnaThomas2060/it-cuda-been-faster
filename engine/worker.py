@@ -17,11 +17,14 @@ from engine.verifier import verify_kernel  # noqa: E402
 
 
 def _set_resource_limits(timeout_sec: float) -> None:
+    # No RLIMIT_CPU: it counts CPU time over the whole process lifetime, so in
+    # this long-lived loop it would kill the worker after a few hundred CPU
+    # seconds of normal work. The dispatcher enforces a per-request wall-clock
+    # timeout (conn.poll) instead. `timeout_sec` is kept for API compatibility.
+    del timeout_sec
     try:
         import resource
 
-        cpu_limit = max(1, int(timeout_sec * 2))
-        resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit, cpu_limit + 5))
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         resource.setrlimit(resource.RLIMIT_FSIZE, (1024**3, 1024**3))
     except Exception:

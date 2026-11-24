@@ -9,6 +9,11 @@ from src.contracts import KernelEvalRequest, KernelEvalResponse, MockVerifier
 from src.verifier import KernelVerifier, VerifierConfig
 
 
+def _device_index(device: str) -> int:
+    """'cuda:1' -> 1, 'cuda' -> 0."""
+    return int(device.split(":", 1)[1]) if ":" in device else 0
+
+
 def _dump_model(model: Any) -> Dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump()
@@ -178,15 +183,20 @@ class VerifierHarnessDispatcher:
 
     @staticmethod
     def _resolve_verification_device(config: Any) -> Optional[int]:
+        """Explicit second GPU for >3x confirmations, or None.
+
+        Never guessed: the training GPU would time candidates next to the
+        policy's own kernels and reject real speedups as cross-GPU mismatches.
+        """
         if not getattr(config, "cross_gpu_validation", False):
             return None
-        verifier_dev = str(getattr(config, "verifier_device", "cuda:0"))
-        primary_idx = int(verifier_dev.split(":", 1)[1]) if ":" in verifier_dev else 0
-        train_dev = str(getattr(config, "device", "cuda:0"))
-        train_idx = int(train_dev.split(":", 1)[1]) if ":" in train_dev else 0
-        if train_idx != primary_idx:
-            return train_idx
-        return 1 if primary_idx == 0 else 0
+        device = getattr(config, "verification_device", None)
+        if not device:
+            return None
+        busy = {str(getattr(config, "device", "")), str(getattr(config, "verifier_device", ""))}
+        if str(device) in busy:
+            raise ValueError(f"verification_device {device} is also used for training/verifying")
+        return _device_index(str(device))
 
     def evaluate(self, request: KernelEvalRequest) -> KernelEvalResponse:
         if request.run_sanitizer and not self.verifier.config.memcheck:

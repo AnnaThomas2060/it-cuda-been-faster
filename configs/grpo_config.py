@@ -120,6 +120,10 @@ class ExperimentConfig:
     variance_threshold: float = 0.005
     min_measurement_ms: float = 0.005
     cross_gpu_validation: bool = False
+    # GPU that re-times >3x speedups. Must differ from both `device` (busy
+    # with the policy) and `verifier_device`. None: no confirmation, so >3x
+    # speedups earn no reward.
+    verification_device: Optional[str] = None
     cross_gpu_ratio_threshold: float = 3.0
     cross_gpu_tolerance: float = 0.10
     enable_sanitizer: bool = False
@@ -205,6 +209,13 @@ class ExperimentConfig:
             raise ValueError("dr_grpo_l_norm must be > 0 for the dr_grpo loss")
         if self.reward_clip <= 0:
             raise ValueError("reward_clip must be positive")
+        if self.verification_device is not None and self.verification_device in (
+            self.device,
+            self.verifier_device,
+        ):
+            raise ValueError(
+                "verification_device must differ from device (training) and verifier_device"
+            )
         if self.rollout_batch_size < 1:
             raise ValueError("rollout_batch_size must be at least 1")
         if self.verifier_workers < 1:

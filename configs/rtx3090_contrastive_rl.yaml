@@ -25,7 +25,7 @@ gradient_accumulation_steps: 4
 max_steps: 24
 training_passes: 2
 tasks_per_step: 3
-rollout_batch_size: 1
+rollout_batch_size: 4  # throughput only; 1 measured ~3.5 min/completion on a 3090
 max_prompt_length: 3072
 max_completion_length: 1024
 max_teacher_examples: 2

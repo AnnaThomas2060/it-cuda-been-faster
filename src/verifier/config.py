@@ -53,3 +53,25 @@ class VerifierConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+def suspicious_threshold(task_id: str, base: float, teacher_factor: float = 2.0) -> float:
+    """Speedup above which a candidate needs second-GPU confirmation.
+
+    `max(base, teacher_factor * best verified teacher speedup)`, after
+    CUDA-L1's "more than 2x the previous best" rule. A flat 3x would flag every
+    good kernel on tasks where verified teachers already exceed 3x (channel
+    RMSNorm teachers measure about 5x), so those kernels would get no reward
+    whenever no spare GPU is free for confirmation. Tasks without a measured
+    teacher keep `base`.
+    """
+    try:
+        from data.example_store import get_teacher_examples
+    except ImportError:
+        return base
+    measured = [
+        float(t["speedup"])
+        for t in get_teacher_examples(task_id)
+        if t.get("verified") and t.get("speedup")
+    ]
+    return max([base] + [teacher_factor * s for s in measured])

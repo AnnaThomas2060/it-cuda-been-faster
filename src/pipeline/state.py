@@ -94,8 +94,17 @@ class Trajectory:
             for step in self.steps
         ]
 
-    def compute_returns(self, gamma: float) -> None:
+    def compute_returns(self, gamma: float, horizon: Optional[int] = None) -> None:
+        """Discounted returns. With `horizon`, a trajectory that stopped early
+        is padded with its final reward for the turns it skipped: the solved
+        kernel stays solved. Without padding, stopping early would earn a lower
+        turn-0 return than continuing, so fast success gets a negative advantage."""
         running = 0.0
+        missing = (horizon or 0) - len(self.steps)
+        if self.steps and missing > 0:
+            terminal = self.steps[-1].reward
+            for _ in range(missing):
+                running = terminal + gamma * running
         for step in reversed(self.steps):
             running = step.reward + gamma * running
             step.discounted_return = running
